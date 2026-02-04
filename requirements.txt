@@ -1,0 +1,26 @@
+# Core model
+torch>=2.1.0
+torchvision>=0.16.0
+torchaudio>=2.1.0
+einops
+diffusers
+
+# Config & logging
+hydra-core
+omegaconf
+wandb
+
+# Simulation environments
+pybullet
+gym
+scipy
+cloudpickle
+
+# Data & utilities
+numpy
+tqdm
+opencv-python
+
+# Evaluation video (optional)
+imageio
+scikit-video

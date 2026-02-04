@@ -1,0 +1,14 @@
+defaults:
+  - base_pefm
+
+env:
+  env_class: insert
+  args:
+    max_episode_length: 80
+
+model:
+  symmetry:
+    group_type: c4
+    distribution_type: gumbel_categorical
+    num_samples: 4
+    entropy_weight: 0.005

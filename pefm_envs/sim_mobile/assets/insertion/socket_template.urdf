@@ -1,0 +1,157 @@
+<?xml version="1.0" ?>
+<!-- Parametric socket with a square hole and keyway slot on the +X side.
+     Template variables: S (peg side), CL (clearance), WT (wall thickness),
+     WH (wall height), PT (plate thickness), NS (notch size). -->
+<robot name="socket">
+    <!-- Base plate -->
+    <link name="base_link">
+        <visual>
+            <origin xyz="0 0 ${PT / 2}" />
+            <geometry>
+                <box size="${S + 2 * WT + 2 * CL} ${S + 2 * WT + 2 * CL} ${PT}" />
+            </geometry>
+        </visual>
+        <collision>
+            <origin xyz="0 0 ${PT / 2}" />
+            <geometry>
+                <box size="${S + 2 * WT + 2 * CL} ${S + 2 * WT + 2 * CL} ${PT}" />
+            </geometry>
+        </collision>
+        <inertial>
+            <mass value="1.0" />
+            <origin xyz="0 0 ${PT / 2}" />
+            <inertia ixx="0.01" ixy="0.0" ixz="0.0" iyy="0.01" iyz="0.0" izz="0.01" />
+        </inertial>
+    </link>
+
+    <!-- Wall: -X side (full) -->
+    <link name="wall_neg_x">
+        <visual>
+            <origin xyz="0 0 0" />
+            <geometry>
+                <box size="${WT} ${S + 2 * CL} ${WH}" />
+            </geometry>
+        </visual>
+        <collision>
+            <origin xyz="0 0 0" />
+            <geometry>
+                <box size="${WT} ${S + 2 * CL} ${WH}" />
+            </geometry>
+        </collision>
+        <inertial>
+            <mass value="0.1" />
+            <origin xyz="0 0 0" />
+            <inertia ixx="0.001" ixy="0.0" ixz="0.0" iyy="0.001" iyz="0.0" izz="0.001" />
+        </inertial>
+    </link>
+    <joint name="joint_wall_neg_x" type="fixed">
+        <origin xyz="${-(S / 2 + CL + WT / 2)} 0 ${PT + WH / 2}" />
+        <parent link="base_link" />
+        <child link="wall_neg_x" />
+    </joint>
+
+    <!-- Wall: +Y side (full) -->
+    <link name="wall_pos_y">
+        <visual>
+            <origin xyz="0 0 0" />
+            <geometry>
+                <box size="${S + 2 * CL + 2 * WT} ${WT} ${WH}" />
+            </geometry>
+        </visual>
+        <collision>
+            <origin xyz="0 0 0" />
+            <geometry>
+                <box size="${S + 2 * CL + 2 * WT} ${WT} ${WH}" />
+            </geometry>
+        </collision>
+        <inertial>
+            <mass value="0.1" />
+            <origin xyz="0 0 0" />
+            <inertia ixx="0.001" ixy="0.0" ixz="0.0" iyy="0.001" iyz="0.0" izz="0.001" />
+        </inertial>
+    </link>
+    <joint name="joint_wall_pos_y" type="fixed">
+        <origin xyz="0 ${S / 2 + CL + WT / 2} ${PT + WH / 2}" />
+        <parent link="base_link" />
+        <child link="wall_pos_y" />
+    </joint>
+
+    <!-- Wall: -Y side (full) -->
+    <link name="wall_neg_y">
+        <visual>
+            <origin xyz="0 0 0" />
+            <geometry>
+                <box size="${S + 2 * CL + 2 * WT} ${WT} ${WH}" />
+            </geometry>
+        </visual>
+        <collision>
+            <origin xyz="0 0 0" />
+            <geometry>
+                <box size="${S + 2 * CL + 2 * WT} ${WT} ${WH}" />
+            </geometry>
+        </collision>
+        <inertial>
+            <mass value="0.1" />
+            <origin xyz="0 0 0" />
+            <inertia ixx="0.001" ixy="0.0" ixz="0.0" iyy="0.001" iyz="0.0" izz="0.001" />
+        </inertial>
+    </link>
+    <joint name="joint_wall_neg_y" type="fixed">
+        <origin xyz="0 ${-(S / 2 + CL + WT / 2)} ${PT + WH / 2}" />
+        <parent link="base_link" />
+        <child link="wall_neg_y" />
+    </joint>
+
+    <!-- Wall: +X side, split into two halves leaving a keyway gap of NS width -->
+    <!-- +X upper half (positive Y part) -->
+    <link name="wall_pos_x_upper">
+        <visual>
+            <origin xyz="0 0 0" />
+            <geometry>
+                <box size="${WT} ${(S + 2 * CL - NS) / 2} ${WH}" />
+            </geometry>
+        </visual>
+        <collision>
+            <origin xyz="0 0 0" />
+            <geometry>
+                <box size="${WT} ${(S + 2 * CL - NS) / 2} ${WH}" />
+            </geometry>
+        </collision>
+        <inertial>
+            <mass value="0.05" />
+            <origin xyz="0 0 0" />
+            <inertia ixx="0.0005" ixy="0.0" ixz="0.0" iyy="0.0005" iyz="0.0" izz="0.0005" />
+        </inertial>
+    </link>
+    <joint name="joint_wall_pos_x_upper" type="fixed">
+        <origin xyz="${S / 2 + CL + WT / 2} ${(NS + (S + 2 * CL - NS) / 2) / 2} ${PT + WH / 2}" />
+        <parent link="base_link" />
+        <child link="wall_pos_x_upper" />
+    </joint>
+
+    <!-- +X lower half (negative Y part) -->
+    <link name="wall_pos_x_lower">
+        <visual>
+            <origin xyz="0 0 0" />
+            <geometry>
+                <box size="${WT} ${(S + 2 * CL - NS) / 2} ${WH}" />
+            </geometry>
+        </visual>
+        <collision>
+            <origin xyz="0 0 0" />
+            <geometry>
+                <box size="${WT} ${(S + 2 * CL - NS) / 2} ${WH}" />
+            </geometry>
+        </collision>
+        <inertial>
+            <mass value="0.05" />
+            <origin xyz="0 0 0" />
+            <inertia ixx="0.0005" ixy="0.0" ixz="0.0" iyy="0.0005" iyz="0.0" izz="0.0005" />
+        </inertial>
+    </link>
+    <joint name="joint_wall_pos_x_lower" type="fixed">
+        <origin xyz="${S / 2 + CL + WT / 2} ${-(NS + (S + 2 * CL - NS) / 2) / 2} ${PT + WH / 2}" />
+        <parent link="base_link" />
+        <child link="wall_pos_x_lower" />
+    </joint>
+</robot>

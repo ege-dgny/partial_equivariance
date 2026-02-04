@@ -1,0 +1,37 @@
+name: pefm
+channels:
+  - defaults
+  - conda-forge
+dependencies:
+  - python=3.10
+  - pip
+  - ffmpeg
+  - pip:
+    # PyTorch (CUDA 11.8) — adjust index-url for your CUDA version
+    - torch>=2.1.0
+    - torchvision>=0.16.0
+    - torchaudio>=2.1.0
+
+    # Core model dependencies
+    - einops
+    - diffusers
+
+    # Config & logging
+    - hydra-core
+    - omegaconf
+    - wandb
+
+    # Simulation environments
+    - pybullet
+    - gym
+    - scipy
+    - cloudpickle
+
+    # Data & utilities
+    - numpy
+    - tqdm
+    - opencv-python
+
+    # Evaluation video (optional — only needed for saving eval videos)
+    - imageio
+    - scikit-video
