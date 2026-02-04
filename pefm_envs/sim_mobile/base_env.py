@@ -793,18 +793,51 @@ class BaseEnv(object):
     def _get_rigid_body_mesh(self, obj_id, link_index=None):
         # get mesh of rigid body; for primitive shapes (cylinder, sphere, box)
         # that have no mesh data, generate synthetic surface samples
-        mesh_data = self.sim.getMeshData(obj_id)
-        mesh = np.array(mesh_data[1]) if len(mesh_data[1]) > 0 else np.zeros((0, 3))
-        if mesh.size == 0:
-            mesh = self._sample_primitive_surface(obj_id)
+        if link_index is not None and link_index >= 0:
+            # Get mesh for a specific link of a compound object
+            try:
+                mesh_data = self.sim.getMeshData(obj_id, linkIndex=link_index)
+                mesh = np.array(mesh_data[1]) if len(mesh_data[1]) > 0 else np.zeros((0, 3))
+            except Exception:
+                mesh = np.zeros((0, 3))
             if mesh.size == 0:
-                return np.zeros((0, 3))
-        obj_pos, obj_ori = self.sim.getBasePositionAndOrientation(obj_id)
-        rotation = Rotation.from_quat(obj_ori)
-        rotation_matrix = rotation.as_matrix()
-        mesh = np.dot(mesh, rotation_matrix.T)
-        mesh += np.array(obj_pos)[None]
-        return mesh
+                # Generate surface points from collision shape
+                shape_data = self.sim.getCollisionShapeData(obj_id, link_index)
+                if len(shape_data) > 0:
+                    dims = shape_data[0][3]
+                    local_pos = np.array(shape_data[0][5])
+                    half = np.array(dims)
+                    # Sample box surface points
+                    pts = []
+                    n_per_face = 30
+                    for axis in range(3):
+                        for sign in [-1, 1]:
+                            face = np.random.uniform(-1, 1, (n_per_face, 3)) * half
+                            face[:, axis] = sign * half[axis]
+                            pts.append(face + local_pos)
+                    mesh = np.concatenate(pts, axis=0)
+                else:
+                    return np.zeros((0, 3))
+            # Transform by link world pose
+            link_state = self.sim.getLinkState(obj_id, link_index)
+            pos, ori = np.array(link_state[0]), link_state[1]
+            rotation = Rotation.from_quat(ori)
+            mesh = np.dot(mesh, rotation.as_matrix().T) + pos[None]
+            return mesh
+        else:
+            # Base link (-1) or free object
+            mesh_data = self.sim.getMeshData(obj_id)
+            mesh = np.array(mesh_data[1]) if len(mesh_data[1]) > 0 else np.zeros((0, 3))
+            if mesh.size == 0:
+                mesh = self._sample_primitive_surface(obj_id)
+                if mesh.size == 0:
+                    return np.zeros((0, 3))
+            obj_pos, obj_ori = self.sim.getBasePositionAndOrientation(obj_id)
+            rotation = Rotation.from_quat(obj_ori)
+            rotation_matrix = rotation.as_matrix()
+            mesh = np.dot(mesh, rotation_matrix.T)
+            mesh += np.array(obj_pos)[None]
+            return mesh
 
     def _sample_primitive_surface(self, obj_id, num_samples=200):
         """Generate surface points for PyBullet primitive shapes."""
@@ -885,13 +918,23 @@ class BaseEnv(object):
                 mesh_vertices = self._get_rigid_body_mesh(obj_id)
                 link_idxs = None
             else:
-                # compound rigid object
+                # compound rigid object — include base link (-1) and all child links
                 num_joints = self.sim.getNumJoints(obj_id)
                 mesh_vertices = []
                 link_idxs = []
+                # Base link (-1)
+                base_mesh = self._get_rigid_body_mesh(obj_id, link_index=None)
+                if base_mesh.size > 0:
+                    mesh_vertices.append(base_mesh)
+                    link_idxs.append(np.array([-1] * len(base_mesh)))
+                # Child links
                 for i in range(num_joints):
-                    mesh_vertices.append(self._get_rigid_body_mesh(obj_id, i))
-                    link_idxs.append(np.array([i] * len(mesh_vertices[-1])))
+                    link_mesh = self._get_rigid_body_mesh(obj_id, i)
+                    if link_mesh.size > 0:
+                        mesh_vertices.append(link_mesh)
+                        link_idxs.append(np.array([i] * len(link_mesh)))
+                if len(mesh_vertices) == 0:
+                    continue
                 mesh_vertices = np.concatenate(mesh_vertices)
                 link_idxs = np.concatenate(link_idxs)
             vertex_id = get_closest(pos, mesh_vertices)[0]
@@ -935,16 +978,24 @@ class BaseEnv(object):
             )
             self.constraint_ids[robot_i] = constraint_id
         else:
-            # Rigid body: create a fixed constraint between EE and object
+            # Rigid body: create a fixed constraint between EE and object.
+            # Always attach to the base link (-1) for simplicity — for URDFs
+            # with only fixed joints, this is equivalent to any child link.
+            # Compute attachment in base link's local frame.
             obj_pos, obj_ori = self.sim.getBasePositionAndOrientation(obj_id)
-            child_frame_pos = (np.array(vertex_pos) - np.array(obj_pos)).tolist()
+            inv_pos, inv_ori = self.sim.invertTransform(
+                list(obj_pos), list(obj_ori)
+            )
+            child_frame_pos, _ = self.sim.multiplyTransforms(
+                inv_pos, inv_ori, list(vertex_pos), [0, 0, 0, 1]
+            )
             constraint_id = self.sim.createConstraint(
                 robot_id, link_id,
-                obj_id, link_idx if link_idx != -1 else -1,
+                obj_id, -1,
                 jointType=pybullet.JOINT_FIXED,
                 jointAxis=[0, 0, 0],
                 parentFramePosition=[0, 0, 0],
-                childFramePosition=child_frame_pos,
+                childFramePosition=list(child_frame_pos),
             )
             self.sim.changeConstraint(constraint_id, maxForce=500)
             self.constraint_ids[robot_i] = constraint_id

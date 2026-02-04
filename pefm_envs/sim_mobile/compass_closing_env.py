@@ -286,9 +286,11 @@ class CompassClosingEnv(BaseEnv):
 
     def _get_rigid_body_mesh(self, obj_id, link_index=None):
         if obj_id in self.rigid_ids:
+            if link_index is None:
+                # Base link: delegate to parent (handles base link mesh/primitives)
+                return super()._get_rigid_body_mesh(obj_id, link_index=None)
             mesh_vertices = []
-            num_links = p.getNumJoints(obj_id)
-            link_idxs = list(range(num_links)) if link_index is None else [link_index]
+            link_idxs = [link_index]
             for link_idx in link_idxs:
                 col_data = p.getCollisionShapeData(obj_id, link_idx)
                 size = col_data[0][3]

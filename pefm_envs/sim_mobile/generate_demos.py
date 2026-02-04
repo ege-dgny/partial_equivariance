@@ -14,6 +14,7 @@ import cv2
 import logging
 import argparse
 import numpy as np
+import pybullet as p
 from tqdm import tqdm
 from glob import glob
 
@@ -186,7 +187,8 @@ def run_demo(args, counter=0):
     rng_env = np.random.RandomState(seed_env)
     rng_cam = np.random.RandomState(seed_cam)
 
-    # create simulation env
+    # create simulation env (demo_mode signals envs to use simplified settings)
+    args.demo_mode = True
     env = get_env_class(args.task_name)(args, rng_env)
 
     # get initial positions of anchors
@@ -229,6 +231,9 @@ def run_demo(args, counter=0):
 
         # Object-relative phases (0-2): approach, grasp, lift peg
         # World-frame phases (3-4): move over socket, insert
+        # Insertion target: lower the EEF to just above the plate so the peg
+        # descends into the socket cavity (plate_thickness + small margin)
+        insert_z = env.PLATE_THICKNESS + peg_h * 0.1  # EEF target for insertion
         sketch = [
             # Phase 0 (object-relative): approach peg from above
             [(0, 0.0, 0.0, peg_h * 2.5), (0, 0.0, 0.0, peg_h * 2.5)],
@@ -239,7 +244,7 @@ def run_demo(args, counter=0):
             # Phase 3 (world-frame): move over socket
             [(1, socket_x, socket_y, peg_h * 3.0), (0, socket_x + 0.1, socket_y, peg_h * 2.5)],
             # Phase 4 (world-frame): insert into socket
-            [(1, socket_x, socket_y, socket_top_z * 0.5), (0, socket_x + 0.1, socket_y, peg_h * 2.5)],
+            [(1, socket_x, socket_y, insert_z), (0, socket_x + 0.1, socket_y, peg_h * 2.5)],
         ]
         object_phases = {0, 1, 2}
         sketch = split_and_rotate_sketch(sketch, object_phases, ang)
@@ -503,7 +508,17 @@ def run_demo(args, counter=0):
             t += 1
 
     final_rew = env.compute_reward()
-    print(f"Episode reward: {final_rew}")
+    # Debug: print final state for diagnosing low rewards
+    if args.task_name == "pour":
+        mug_pos, _ = env.sim.getBasePositionAndOrientation(env._mug_id)
+        print(f"Episode reward: {final_rew:.3f} | mug_pos: [{mug_pos[0]:.3f}, {mug_pos[1]:.3f}, {mug_pos[2]:.3f}] | bowl: [{env.BOWL_WORLD_POS[0]:.2f}, {env.BOWL_WORLD_POS[1]:.2f}]")
+    elif args.task_name == "insert":
+        peg_pos, peg_quat = env.sim.getBasePositionAndOrientation(env._peg_id)
+        peg_euler = np.array(p.getEulerFromQuaternion(peg_quat))
+        socket_top = env.PLATE_THICKNESS + env.WALL_HEIGHT
+        print(f"Episode reward: {final_rew:.3f} | peg_pos: [{peg_pos[0]:.3f}, {peg_pos[1]:.3f}, {peg_pos[2]:.3f}] | socket: [{env.SOCKET_WORLD_POS[0]:.2f}, {env.SOCKET_WORLD_POS[1]:.2f}] | peg_z_rot: {np.degrees(peg_euler[2]):.1f}deg | socket_top_z: {socket_top:.3f}")
+    else:
+        print(f"Episode reward: {final_rew:.3f}")
 
     if final_rew >= args.data_rew_threshold:
         # write video to file
@@ -620,15 +635,19 @@ def main():
     seed_cam = args.seed_cam
 
     pattern_ix = 0
-    for i in tqdm(range(args.num_demos), desc="Demos"):
-        while True:
-            args.seed = (seed * 99999 + pattern_ix) % 100001
-            args.seed_env = (seed_env * 99999 + pattern_ix) % 100001
-            args.seed_cam = (seed_cam * 99999 + pattern_ix) % 100001
-            success = run_demo(args, pattern_ix)
-            pattern_ix += 1
-            if success:
-                break
+    num_success = 0
+    for i in range(args.num_demos * 10):  # retry budget
+        if num_success >= args.num_demos:
+            break
+        args.seed = (seed * 99999 + pattern_ix) % 100001
+        args.seed_env = (seed_env * 99999 + pattern_ix) % 100001
+        args.seed_cam = (seed_cam * 99999 + pattern_ix) % 100001
+        success = run_demo(args, pattern_ix)
+        pattern_ix += 1
+        if success:
+            num_success += 1
+            print(f"[{num_success}/{args.num_demos}] demos completed")
+    print(f"Done. Generated {num_success}/{args.num_demos} demos.")
 
 
 if __name__ == "__main__":

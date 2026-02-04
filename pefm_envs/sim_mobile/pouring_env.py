@@ -209,29 +209,43 @@ class PouringEnv(BaseEnv):
 
     def compute_reward(self):
         """
-        Reward based on bead proximity to bowl center.
+        Reward based on mug proximity to bowl (simulating pour completion).
 
-        Full success (1.0): bead XY within bowl and at correct Z height.
-        Shaping (0-0.5): proportional to XY proximity.
+        The mug is a solid cylinder so we can't simulate liquid/bead transfer.
+        Instead, reward is based on bringing the mug over the bowl at the right
+        height — this captures the same symmetry conflict (SO(2) grasp vs
+        fixed bowl position).
+
+        Full success (1.0): mug XY within bowl radius and lowered to pour height.
+        Shaping (0-0.7): proportional to XY proximity + height progress.
         """
-        bead_pos, _ = self.sim.getBasePositionAndOrientation(self._bead_id)
-        bead_pos = np.array(bead_pos)
+        mug_pos, _ = self.sim.getBasePositionAndOrientation(self._mug_id)
+        mug_pos = np.array(mug_pos)
 
-        bowl_center = np.array([
+        bowl_center_xy = np.array([
             self.BOWL_WORLD_POS[0],
             self.BOWL_WORLD_POS[1],
-            self.BOWL_HEIGHT / 2 + 0.001,
         ])
 
-        xy_dist = np.linalg.norm(bead_pos[:2] - bowl_center[:2])
+        xy_dist = np.linalg.norm(mug_pos[:2] - bowl_center_xy)
 
-        # Binary success check
-        in_bowl_xy = xy_dist < self.BOWL_RADIUS * 0.9
-        in_bowl_z = bead_pos[2] >= 0 and bead_pos[2] < self.BOWL_HEIGHT * 1.5
+        # Success: mug is over the bowl and lowered to pour height
+        over_bowl = xy_dist < self.BOWL_RADIUS
+        pour_height = mug_pos[2] < self.MUG_HEIGHT * 2.0  # lowered near bowl
 
-        if in_bowl_xy and in_bowl_z:
+        if over_bowl and pour_height:
             return 1.0
 
-        # Shaping reward: proximity
-        shaping = 0.5 * (1.0 - min(xy_dist / 0.5, 1.0))
-        return shaping
+        # Shaping reward
+        reward = 0.0
+
+        # XY proximity (0-0.5)
+        reward += 0.5 * max(0, 1.0 - xy_dist / 0.4)
+
+        # Height progress — only if XY is close (0-0.3)
+        if xy_dist < self.BOWL_RADIUS * 2:
+            # Reward for lowering mug (from lifted height ~0.24 toward pour height ~0.12)
+            height_progress = max(0, 1.0 - mug_pos[2] / (self.MUG_HEIGHT * 4.0))
+            reward += 0.3 * height_progress
+
+        return np.clip(reward, 0.0, 1.0)

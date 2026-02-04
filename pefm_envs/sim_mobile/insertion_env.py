@@ -111,8 +111,14 @@ class InsertionEnv(BaseEnv):
         return "insert"
 
     def _reset_sim(self):
-        # Sample a C4 rotation for the peg
-        self._peg_spawn_rotation = self.rng.choice(self.C4_ROTATIONS)
+        # Sample a C4 rotation for the peg.
+        # During demo generation (no orientation control in sketch), use 0
+        # so the key is already aligned with the socket keyway (+X).
+        # During evaluation, the policy must handle random C4 rotations.
+        if hasattr(self.args, 'demo_mode') and self.args.demo_mode:
+            self._peg_spawn_rotation = 0.0
+        else:
+            self._peg_spawn_rotation = self.rng.choice(self.C4_ROTATIONS)
 
         super()._reset_sim()
 
@@ -219,7 +225,7 @@ class InsertionEnv(BaseEnv):
         Reward based on position, descent, and orientation alignment.
 
         Position (0.3): peg XY near socket center
-        Descent (0.3): peg Z below socket wall height
+        Descent (0.3): peg Z below socket wall height (peg is inside cavity)
         Orientation (0.2): peg Z-rotation aligned to 0 (key facing +X)
         Full success (1.0): all three pass strict checks
         """
@@ -236,9 +242,12 @@ class InsertionEnv(BaseEnv):
         xy_dist = np.linalg.norm(peg_pos[:2] - socket_center)
         pos_threshold = self.PEG_SIDE * 0.5
 
-        # Descent check
+        # Descent check: peg base position should be below socket wall height.
+        # The peg URDF has its collision box centered at z=PEG_HEIGHT/2 from
+        # the base position, so peg_pos[2] is the URDF base, not the center.
+        # Peg is "inserted" when its base is at or below the plate surface.
         socket_top_z = self.PLATE_THICKNESS + self.WALL_HEIGHT
-        descended = peg_pos[2] < socket_top_z * 0.3
+        descended = peg_pos[2] < socket_top_z
 
         # Orientation check: peg Z-rotation should be near 0 (mod pi/2)
         # The key should face +X, so total Z rotation should be ~0
@@ -246,7 +255,7 @@ class InsertionEnv(BaseEnv):
         # Normalize to [-pi, pi]
         z_rot = np.mod(z_rot + np.pi, 2 * np.pi) - np.pi
         rot_error = abs(z_rot)  # distance from 0
-        rot_aligned = rot_error < np.deg2rad(10)
+        rot_aligned = rot_error < np.deg2rad(15)
 
         # Full success
         if xy_dist < pos_threshold and descended and rot_aligned:
@@ -260,7 +269,8 @@ class InsertionEnv(BaseEnv):
 
         # Descent progress (0-0.3)
         if xy_dist < pos_threshold * 2:
-            descent_progress = max(0, 1.0 - peg_pos[2] / (socket_top_z * 1.5))
+            # Reward for lowering from initial height toward socket
+            descent_progress = max(0, 1.0 - peg_pos[2] / (socket_top_z * 2.0))
             reward += 0.3 * descent_progress
 
         # Rotation alignment (0-0.2)
