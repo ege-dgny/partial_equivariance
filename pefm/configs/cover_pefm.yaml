@@ -1,0 +1,14 @@
+defaults:
+  - base_pefm
+
+env:
+  env_class: cover
+  args:
+    max_episode_length: 50
+
+model:
+  symmetry:
+    group_type: so2
+    distribution_type: projected_normal
+    num_samples: 8
+    entropy_weight: 0.01
