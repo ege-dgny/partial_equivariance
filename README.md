@@ -66,14 +66,6 @@ python -m pefm_envs.sim_mobile.generate_demos \
     --task_name compass_close --num_demos 50 --data_out_dir ../data/compass_close --randomize_rotation
 ```
 
-EquiBot baseline demos (generated from `equibot/` directory, requires equibot installed) are also compatible:
-
-```bash
-# From equibot/ directory
-python -m equibot.envs.sim_mobile.generate_demos \
-    --data_out_dir ../data/fold --num_demos 50 --task_name fold
-```
-
 ### Train
 
 ```bash
@@ -83,7 +75,7 @@ python -m pefm.train --config-name pour_pefm \
     use_wandb=false
 ```
 
-Available configs: `pour_pefm`, `insert_pefm`, `compass_close_pefm`, `fold_pefm`, `cover_pefm`, `close_pefm`.
+Available configs: `pour_pefm`, `insert_pefm`, `compass_close_pefm`.
 
 To log to W&B: replace `use_wandb=false` with `wandb.entity=<entity> wandb.project=<project>`.
 
@@ -114,4 +106,3 @@ python -m pefm.eval --config-name pour_pefm \
 | Pouring | SO(2) | ProjectedNormal | C-inf grasp symmetry vs fixed bowl position |
 | Insertion | C4 | GumbelSoftmax | C4 peg symmetry vs keyed socket orientation |
 | Compass Closing | SO(2) | ProjectedNormal | Full geometric symmetry vs cardinal flap order |
-| Fold/Cover/Close | SO(2) | ProjectedNormal | Fully symmetric (equibot baselines) |
