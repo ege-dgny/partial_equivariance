@@ -294,7 +294,7 @@ def run_demo(args, counter=0):
     record_t = 0
     cam_dist = args.cam_dist
     sim_unstable = False
-    for step_idx, step in enumerate(tqdm(sketch)):
+    for step_idx, step in enumerate(sketch):
         if sim_unstable:
             break
         if step_idx == 0:
@@ -573,7 +573,7 @@ def get_args(parent=None):
         "--cam_resolution", type=int, default=240, help="Point cloud resolution"
     )
     parser.add_argument(
-        "--cam_rec_interval", type=int, default=1,
+        "--cam_rec_interval", type=int, default=5,
         help="How many steps to skip between each cam shot",
     )
     parser.add_argument(
