@@ -1,0 +1,19 @@
+defaults:
+  - base_pefm
+
+env:
+  env_class: peg_insert
+  num_eef: 1
+  args:
+    num_eef: 1
+    max_episode_length: 80
+
+model:
+  symmetry:
+    group_type: c4
+    distribution_type: gumbel_softmax
+    num_samples: 4
+    entropy_weight: 0.01
+    gumbel_tau: 1.0
+    gumbel_tau_min: 0.1
+    gumbel_anneal_rate: 0.0003

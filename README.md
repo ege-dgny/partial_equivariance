@@ -12,7 +12,7 @@ Training uses flow matching (OT conditional paths) with entropy regularization:
 L = L_flow - lambda * H(p_phi)
 ```
 
-When the task is symmetric (e.g., grasping), `p_phi` stays uniform and full equivariance is preserved. When the task breaks symmetry (e.g., pouring into a fixed-position bowl), `p_phi` collapses toward identity.
+When the task is symmetric (e.g., grasping), `p_phi` stays uniform and full equivariance is preserved. When the task breaks symmetry (e.g., placing on a fixed-position tray), `p_phi` collapses toward identity.
 
 ## Setup
 
@@ -45,7 +45,8 @@ pefm/                   Model, training, evaluation
   datasets/             NPZ episode loader
   configs/              Hydra YAML configs per task
 pefm_envs/              PyBullet simulation environments
-  sim_mobile/           Pouring, insertion, compass closing tasks
+  sim_franka/           Single Franka Panda tabletop tasks (primary)
+  sim_mobile/           Dual Kinova mobile-base tasks (legacy)
 ```
 
 ## Usage
@@ -55,36 +56,43 @@ All commands run from this directory (`Partial_Equivariance/`).
 ### Generate demonstrations
 
 ```bash
-# PEFM tasks
-python -m pefm_envs.sim_mobile.generate_demos \
-    --task_name pour --num_demos 50 --data_out_dir ../data/pour --randomize_rotation
+# Pick-and-Place (SO2 conflict: symmetric grasp, fixed-position tray)
+python -m pefm_envs.sim_franka.generate_demos \
+    --task_name pick_place --num_demos 50 --data_out_dir ../data/pick_place \
+    --randomize_rotation
 
-python -m pefm_envs.sim_mobile.generate_demos \
-    --task_name insert --num_demos 50 --data_out_dir ../data/insert --randomize_rotation
+# Peg Insertion (C4 conflict: C4 peg, fixed-orientation socket)
+python -m pefm_envs.sim_franka.generate_demos \
+    --task_name peg_insert --num_demos 50 --data_out_dir ../data/peg_insert \
+    --randomize_rotation
 
-python -m pefm_envs.sim_mobile.generate_demos \
-    --task_name compass_close --num_demos 50 --data_out_dir ../data/compass_close --randomize_rotation
+# Centering (SO2 fully symmetric control — no conflict, entropy stays maximal)
+python -m pefm_envs.sim_franka.generate_demos \
+    --task_name centering --num_demos 50 --data_out_dir ../data/centering \
+    --randomize_rotation
 ```
+
+Videos are recorded with 2 views (front + side) stitched side-by-side.
 
 ### Train
 
 ```bash
-python -m pefm.train --config-name pour_pefm \
-    prefix=pour_v1 \
-    data.dataset.path=../data/pour/pcs \
+python -m pefm.train --config-name pick_place_pefm \
+    prefix=pick_place_v1 \
+    data.dataset.path=../data/pick_place/pcs \
     use_wandb=false
 ```
 
-Available configs: `pour_pefm`, `insert_pefm`, `compass_close_pefm`.
+Available configs: `pick_place_pefm`, `peg_insert_pefm`, `centering_pefm`.
 
 To log to W&B: replace `use_wandb=false` with `wandb.entity=<entity> wandb.project=<project>`.
 
 ### Evaluate
 
 ```bash
-python -m pefm.eval --config-name pour_pefm \
-    prefix=eval_pour_v1 mode=eval \
-    training.ckpt="logs/train/pour_v1/ckpt01999.pth" \
+python -m pefm.eval --config-name pick_place_pefm \
+    prefix=eval_pick_place_v1 mode=eval \
+    training.ckpt="logs/train/pick_place_v1/ckpt01999.pth" \
     env.vectorize=true
 ```
 
@@ -103,6 +111,36 @@ python -m pefm.eval --config-name pour_pefm \
 
 | Task | Group | Distribution | Symmetry conflict |
 |---|---|---|---|
-| Pouring | SO(2) | ProjectedNormal | C-inf grasp symmetry vs fixed bowl position |
-| Insertion | C4 | GumbelSoftmax | C4 peg symmetry vs keyed socket orientation |
-| Compass Closing | SO(2) | ProjectedNormal | Full geometric symmetry vs cardinal flap order |
+| Pick-and-Place | SO(2) | ProjectedNormal | SO(2) cylinder grasp vs fixed-position tray |
+| Peg Insertion | C4 | GumbelSoftmax | C4 peg grasp vs fixed-orientation keyed socket |
+| Centering | SO(2) | ProjectedNormal | Fully symmetric control (no conflict) |
+
+## Robot
+
+Single **Franka Panda** 7-DOF arm, fixed to table at origin. Uses PyBullet's built-in URDF from `pybullet_data`. Action space: `[gripper, vx, vy, vz, drx, dry, drz]`. Observation: `[eef_xyz, x_dir, z_dir, gravity, grip]` (13-dim).
+
+This matches the lab's real Franka Panda setup for sim-to-real transfer.
+
+## Task Status
+
+| Task | Status | Notes |
+|------|--------|-------|
+| pick_place | Working | Reward threshold 0.9, reliable demos |
+| centering | Partial | Works with threshold 0.5, some drift |
+| peg_insert | Failing | Needs wrist rotation, collision issues |
+
+## Real-Time Visualization
+
+Watch demo generation live with the `--vis` flag:
+
+```bash
+python -m pefm_envs.sim_franka.generate_demos --task pick_place --num_demos 1 --vis
+```
+
+## Known Issues
+
+- **IK offset**: `panda_hand` EE link has ~4cm Z offset from fingertip
+- **Constraint drift**: Grasped objects may drift during fast movements
+- **peg_insert**: Needs wrist rotation control and collision-free approach
+
+See [docs/FRANKA_ENV.md](docs/FRANKA_ENV.md) for detailed troubleshooting.

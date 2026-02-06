@@ -12,8 +12,17 @@ DEFAULT_ANCHOR_CONFIG = [
 
 KINOVA_HOME_QPOS = np.array([0.0, 0.26, 3.14, -2.27, 0.0, 0.96, 1.57])
 
+# Franka Panda neutral pose (7 revolute joints)
+FRANKA_HOME_QPOS = np.array([0.0, -0.785, 0.0, -2.356, 0.0, 1.571, 0.785])
+
 
 SIM_ROBOT_INFO = {
+    "franka_panda": {
+        "file_name": "franka_panda/panda.urdf",  # from pybullet_data
+        "ee_joint_name": "panda_joint8",
+        "ee_link_name": "panda_hand",
+        "rest_arm_qpos": FRANKA_HOME_QPOS,
+    },
     "kinova": {
         "file_name": "kinova/base_with_kinova_gripper.urdf",
         "ee_joint_name": "end_effector",

@@ -47,6 +47,16 @@ def get_env_class(env_name):
     elif env_name == "compass_close":
         from pefm_envs.sim_mobile.compass_closing_env import CompassClosingEnv
         return CompassClosingEnv
+    # Franka single-arm tasks
+    elif env_name == "pick_place":
+        from pefm_envs.sim_franka.pick_place_env import PickPlaceEnv
+        return PickPlaceEnv
+    elif env_name == "peg_insert":
+        from pefm_envs.sim_franka.peg_insert_env import PegInsertEnv
+        return PegInsertEnv
+    elif env_name == "centering":
+        from pefm_envs.sim_franka.centering_env import CenteringEnv
+        return CenteringEnv
     else:
         raise ValueError(f"Environment [{env_name}] not found.")
 
