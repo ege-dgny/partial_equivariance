@@ -35,8 +35,9 @@ def evaluate_and_replace_expressions(input_file, output_file, local_vars):
 class PegInsertEnv(FrankaEnv):
 
     PEG_SIDE = 0.04        # 4cm side
-    PEG_HEIGHT = 0.06       # 6cm height
+    PEG_HEIGHT = 0.08       # 8cm height
     NOTCH_SIZE = 0.008      # 8mm keyway
+    NS_SOCKET = 0.012       # 12mm notch size
     CLEARANCE = 0.002       # 2mm clearance
     WALL_THICKNESS = 0.01   # 1cm guide walls
     WALL_HEIGHT = 0.04      # 4cm wall height
@@ -177,7 +178,7 @@ class PegInsertEnv(FrankaEnv):
 
         local_vars = dict(
             S=self.PEG_SIDE, CL=self.CLEARANCE, WT=self.WALL_THICKNESS,
-            WH=self.WALL_HEIGHT, PT=self.PLATE_THICKNESS, NS=self.NOTCH_SIZE,
+            WH=self.WALL_HEIGHT, PT=self.PLATE_THICKNESS, NS=self.NS_SOCKET,
         )
         with NamedTemporaryFile(mode="w", suffix=".urdf", delete=False) as f:
             tmp_path = f.name
