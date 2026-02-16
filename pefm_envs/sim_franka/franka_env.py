@@ -72,6 +72,7 @@ class FrankaEnv:
         self.constraint_id = None
         self._done = None
         self._last_action_time = None
+        self._grasped_obj_id = None
 
         # Initialize simulation
         self._init_sim()
@@ -184,6 +185,10 @@ class FrankaEnv:
         sim.resetSimulation(pybullet.RESET_USE_DEFORMABLE_WORLD)
         sim.setGravity(0, 0, self.SIM_GRAVITY)
         sim.setTimeStep(1.0 / self.SIM_FREQ)
+        
+        # [CRITICAL FIX] Increase solver iterations for stable tight-clearance insertion
+        sim.setPhysicsEngineParameter(numSolverIterations=100)
+        
         sim.setAdditionalSearchPath(pybullet_data.getDataPath())
 
         # Floor
@@ -212,6 +217,12 @@ class FrankaEnv:
         # Let physics settle
         for _ in range(20):
             sim.stepSimulation()
+
+        # Disable collisions between robot and graspable objects permanently.
+        # The Panda's collision meshes (convex hulls) are larger than the visual
+        # geometry, creating an invisible "force field" that pushes objects away.
+        # Since we use constraint-based grasping, physical contact isn't needed.
+        self._disable_graspable_collisions()
 
     def _load_robot(self):
         """Load Franka Panda from pybullet_data with fixed base."""
@@ -245,8 +256,6 @@ class FrankaEnv:
         )
 
         # Override IK rest poses with the standard Franka home configuration.
-        # PyBullet's IK uses restPoses as a seed; the default (joint limit
-        # midpoints) gives terrible solutions for the Panda.
         home_qpos = np.zeros(self.robot.info.dof)
         home_qpos[:7] = FRANKA_HOME_QPOS
         home_qpos[7:] = 0.04  # fingers open
@@ -254,7 +263,6 @@ class FrankaEnv:
         self.robot.default_ik_args["restPoses"] = home_qpos.tolist()
 
         # Reset robot to the actual home joint configuration directly
-        # (bypasses the broken IK-based reset)
         for jid in range(self.robot.info.dof):
             self.sim.resetJointState(
                 bodyUniqueId=self.robot.info.robot_id,
@@ -275,6 +283,7 @@ class FrankaEnv:
         self._episode_reward = 0.0
         self._ac_noise_multiplier = self.rng.rand()
         self.constraint_id = None
+        self._grasped_obj_id = None
         self._randomize_object_scales()
         self._setup_sim()
         self._done = False
@@ -290,17 +299,15 @@ class FrankaEnv:
                 self.rng.randn(3) * self.ac_noise * self._ac_noise_multiplier
             )
 
-        # Gripper
+        # Gripper: determine finger distance for IK
         grip_action = action[0, 0]
-        if grip_action < 0.5:
-            self.robot.open_gripper()
-            self._detach_grasp()
+        gripper_closing = grip_action >= 0.5
+
+        if gripper_closing:
+            fing_dist = 0.0  # fingers closed
         else:
-            self.robot.close_gripper()
-            # Stabilization steps: let fingers close before checking contact
-            for _ in range(10):
-                self.sim.stepSimulation()
-            self._attach_grasp()
+            fing_dist = self.robot.get_max_fing_dist()  # fingers open
+            self._detach_grasp()
 
         # EEF velocity → target EEF pose
         pos_vel = action[0, 1:4]  # vx, vy, vz in world frame
@@ -314,44 +321,52 @@ class FrankaEnv:
         # Clamp Z to avoid going below table
         target_pos[2] = max(target_pos[2], 0.005)
 
-        # Target orientation
+        # Orientation delta (axis-angle in radians)
         if np.linalg.norm(ori_vel) > 1e-6:
-            ori_delta = ori_vel * dt * (180.0 / np.pi)  # convert to degrees
-            delta_quat = axisangle2quat(ori_delta)
-            target_quat = quat_multiply(delta_quat, ee_quat)
+            ori_delta = ori_vel * dt
         else:
-            target_quat = ee_quat
+            ori_delta = None
 
-        # IK and execute
-        target_qpos = self.robot.ee_pos_to_qpos(
-            target_pos, target_quat, fing_dist=0.0
-        )
-
+        # Cartesian interpolation: straight-line EE motion with correct finger state
         steps_per_action = self.SIM_FREQ // self.freq
-        if target_qpos is not None:
-            curr_qpos = self.robot.get_qpos()
-            # In demo mode, use higher gains for tighter tracking.
-            # In eval mode, use default gains.
-            if self.demo_mode:
-                kp_val = 5.0
-                kd_val = 2.0
+        if self.demo_mode:
+            kp_val = 5.0
+            kd_val = 2.0
+        else:
+            kp_val = None  # use robot defaults
+            kd_val = None
+
+        for st in range(steps_per_action):
+            alpha = (st + 1) / steps_per_action
+
+            # Linear position interpolation
+            interp_pos = ee_pos + alpha * (target_pos - ee_pos)
+
+            # Orientation interpolation (fractional axis-angle rotation)
+            if ori_delta is not None:
+                frac_delta_quat = axisangle2quat(ori_delta * alpha)
+                interp_quat = quat_multiply(frac_delta_quat, ee_quat)
             else:
-                kp_val = None  # use robot defaults
-                kd_val = None
-            # Sub-step interpolation for smooth tracking
-            for st in range(steps_per_action):
-                alpha = (st + 1) / steps_per_action
-                interp_qpos = curr_qpos + alpha * (target_qpos - curr_qpos)
+                interp_quat = ee_quat
+
+            # Solve IK with correct finger distance
+            target_qpos = self.robot.ee_pos_to_qpos(
+                interp_pos, interp_quat, fing_dist=fing_dist
+            )
+
+            if target_qpos is not None:
                 self.robot.move_to_qpos(
-                    interp_qpos, mode=pybullet.POSITION_CONTROL,
+                    target_qpos, mode=pybullet.POSITION_CONTROL,
                     kp=kp_val, kd=kd_val,
                 )
-                self.sim.stepSimulation()
-                self._internal_t += 1
-        else:
-            for _ in range(steps_per_action):
-                self.sim.stepSimulation()
-                self._internal_t += 1
+
+            self.sim.stepSimulation()
+            self._internal_t += 1
+
+        # After the full motion (72 sub-steps), fingers have had time to
+        # close and make contact. Now try to create the grasp constraint.
+        if gripper_closing and self.constraint_id is None:
+            self._attach_grasp()
 
         # Realtime sleep for visualization
         if self.vis and self._last_action_time is not None:
@@ -392,125 +407,95 @@ class FrankaEnv:
         return obs.reshape(1, 13)
 
     # ------------------------------------------------------------------ #
-    #  Grasping (contact-based)
+    #  Grasping (constraint-based, collisions permanently disabled)
     # ------------------------------------------------------------------ #
 
-    def _attach_grasp(self):
-        """Create constraint using contact detection with proximity fallback.
+    def _disable_graspable_collisions(self):
+        """Disable collisions between robot and all graspable objects.
 
-        Tries contact-based grasp first (accepts EITHER finger contact),
-        then falls back to proximity-based if no contacts are detected.
+        Called once at scene setup. The Panda URDF's collision meshes are
+        convex hulls much larger than the visual geometry, creating an
+        invisible force field that knocks objects over during approach.
+        Since grasping is constraint-based, physical contact is not needed.
+        """
+        robot_id = self.robot.info.robot_id
+        num_robot_links = self.sim.getNumJoints(robot_id)
+        for oid, graspable in zip(self.rigid_ids, self._rigid_graspable):
+            if graspable:
+                for link_idx in range(-1, num_robot_links):
+                    self.sim.setCollisionFilterPair(
+                        robot_id, oid, link_idx, -1, 0
+                    )
+
+    def _attach_grasp(self):
+        """Find the closest graspable object and lock it to the EE.
+
+        Uses geometric (mesh vertex) distance — works regardless of
+        collision filter state.
         """
         if self.constraint_id is not None:
             return
 
-        robot_id = self.robot.info.robot_id
-        finger_link_ids = self.robot.info.finger_link_ids
-
         graspable_ids = [
             oid for oid, g in zip(self.rigid_ids, self._rigid_graspable) if g
         ]
         if not graspable_ids:
             return
 
-        # Try contact-based first (if fingers available)
-        if len(finger_link_ids) >= 2:
-            for obj_id in graspable_ids:
-                left_contacts = self.sim.getContactPoints(
-                    bodyA=robot_id, bodyB=obj_id,
-                    linkIndexA=finger_link_ids[0]
-                )
-                right_contacts = self.sim.getContactPoints(
-                    bodyA=robot_id, bodyB=obj_id,
-                    linkIndexA=finger_link_ids[1]
-                )
-
-                # Accept if EITHER finger has contact (relaxed from both)
-                if len(left_contacts) > 0 or len(right_contacts) > 0:
-                    all_pts = [np.array(c[5]) for c in left_contacts] + \
-                              [np.array(c[5]) for c in right_contacts]
-                    grasp_center = np.mean(all_pts, axis=0)
-                    self._create_grasp_constraint_at(obj_id, grasp_center)
-                    return
-
-        # Fallback: proximity-based
-        self._attach_grasp_proximity()
-
-    def _attach_grasp_proximity(self):
-        """Fallback proximity-based grasp for robots without 2 finger links."""
         ee_pos = self.robot.get_ee_pos()
+        target_obj_id, _ = self._find_closest_graspable(
+            ee_pos, graspable_ids, max_dist=0.08
+        )
+
+        if target_obj_id is not None:
+            self._lock_object_in_place(target_obj_id)
+
+    def _lock_object_in_place(self, obj_id):
+        """Lock object at its exact current pose relative to EE."""
         robot_id = self.robot.info.robot_id
         ee_link_id = self.robot.info.ee_link_id
 
-        graspable_ids = [
-            oid for oid, g in zip(self.rigid_ids, self._rigid_graspable) if g
-        ]
-        if not graspable_ids:
-            return
-
-        obj_id, vertex_pos = self._find_closest_graspable(ee_pos, graspable_ids)
-        if obj_id is None:
-            return
-
-        # Compute attachment in object's local frame
-        obj_pos, obj_ori = self.sim.getBasePositionAndOrientation(obj_id)
-        inv_pos, inv_ori = self.sim.invertTransform(
-            list(obj_pos), list(obj_ori)
+        # Compute object pose relative to the EE's URDF link frame.
+        # getLinkState[4:6] = world URDF link frame (matches createConstraint's
+        # parentFramePosition reference frame). [0:2] is the CoM frame, which
+        # is offset from the URDF frame for panda_hand, causing the object to
+        # snap to the wrong position.
+        link_state = self.sim.getLinkState(
+            robot_id, ee_link_id, computeForwardKinematics=1
         )
-        child_frame_pos, _ = self.sim.multiplyTransforms(
-            inv_pos, inv_ori, list(vertex_pos), [0, 0, 0, 1]
+        ee_pos = link_state[4]  # URDF link frame world position
+        ee_ori = link_state[5]  # URDF link frame world orientation
+        obj_pos, obj_ori = self.sim.getBasePositionAndOrientation(obj_id)
+
+        inv_ee_pos, inv_ee_ori = self.sim.invertTransform(ee_pos, ee_ori)
+        rel_pos, rel_ori = self.sim.multiplyTransforms(
+            inv_ee_pos, inv_ee_ori, obj_pos, obj_ori
         )
 
         self.constraint_id = self.sim.createConstraint(
-            robot_id, ee_link_id,
-            obj_id, -1,
+            parentBodyUniqueId=robot_id,
+            parentLinkIndex=ee_link_id,
+            childBodyUniqueId=obj_id,
+            childLinkIndex=-1,
             jointType=pybullet.JOINT_FIXED,
             jointAxis=[0, 0, 0],
-            parentFramePosition=[0, 0, 0],
-            childFramePosition=list(child_frame_pos),
+            parentFramePosition=list(rel_pos),
+            childFramePosition=[0, 0, 0],
+            parentFrameOrientation=list(rel_ori),
+            childFrameOrientation=[0, 0, 0, 1],
         )
-        self.sim.changeConstraint(self.constraint_id, maxForce=5000)
-        self._grasped_obj_id = obj_id
-
-    def _create_grasp_constraint_at(self, obj_id, world_grasp_point):
-        """Create fixed constraint at specified world point."""
-        robot_id = self.robot.info.robot_id
-        ee_link_id = self.robot.info.ee_link_id
-
-        # Transform grasp point to object's local frame
-        obj_pos, obj_ori = self.sim.getBasePositionAndOrientation(obj_id)
-        inv_pos, inv_ori = self.sim.invertTransform(list(obj_pos), list(obj_ori))
-        child_frame_pos, _ = self.sim.multiplyTransforms(
-            inv_pos, inv_ori, list(world_grasp_point), [0, 0, 0, 1]
-        )
-
-        # Transform grasp point to EEF's local frame
-        ee_pos, ee_ori = self.sim.getLinkState(robot_id, ee_link_id)[:2]
-        inv_ee_pos, inv_ee_ori = self.sim.invertTransform(list(ee_pos), list(ee_ori))
-        parent_frame_pos, _ = self.sim.multiplyTransforms(
-            inv_ee_pos, inv_ee_ori, list(world_grasp_point), [0, 0, 0, 1]
-        )
-
-        self.constraint_id = self.sim.createConstraint(
-            robot_id, ee_link_id,
-            obj_id, -1,
-            jointType=pybullet.JOINT_FIXED,
-            jointAxis=[0, 0, 0],
-            parentFramePosition=list(parent_frame_pos),  # In EEF frame
-            childFramePosition=list(child_frame_pos),    # In object frame
-        )
-        self.sim.changeConstraint(self.constraint_id, maxForce=5000)
+        self.sim.changeConstraint(self.constraint_id, maxForce=2000)
         self._grasped_obj_id = obj_id
 
     def _detach_grasp(self):
-        """Remove grasp constraint if one exists."""
+        """Remove grasp constraint."""
         if self.constraint_id is not None:
             self.sim.removeConstraint(self.constraint_id)
             self.constraint_id = None
             self._grasped_obj_id = None
 
     def _find_closest_graspable(self, ee_pos, obj_ids, max_dist=0.08):
-        """Find closest surface point on graspable objects."""
+        """Find closest graspable object using geometric mesh distance."""
         best_dist = np.inf
         best_obj = None
         best_pos = None
@@ -518,10 +503,8 @@ class FrankaEnv:
         for obj_id in obj_ids:
             num_joints = self.sim.getNumJoints(obj_id)
             if num_joints == 0:
-                # Simple free body
                 mesh = self._get_rigid_body_mesh(obj_id)
             else:
-                # Compound body: collect all links
                 parts = []
                 base_mesh = self._get_rigid_body_mesh(obj_id, link_index=None)
                 if base_mesh.size > 0:

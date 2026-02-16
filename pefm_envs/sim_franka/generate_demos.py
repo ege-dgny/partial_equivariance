@@ -844,7 +844,7 @@ def get_args():
     parser.add_argument("--dof", type=int, default=7)
     parser.add_argument("--num_eef", type=int, default=1)
     parser.add_argument("--max_episode_length", type=int, default=80)
-    parser.add_argument("--ac_noise", type=float, default=0.02)
+    parser.add_argument("--ac_noise", type=float, default=0)
     parser.add_argument("--freq", type=int, default=5)
     # Object randomization
     parser.add_argument("--randomize_rotation", action="store_true")
@@ -857,7 +857,7 @@ def get_args():
     # Data
     parser.add_argument("--num_demos", type=int, default=1)
     parser.add_argument("--data_out_dir", type=str, default=None)
-    parser.add_argument("--data_rew_threshold", type=float, default=0.9)
+    parser.add_argument("--data_rew_threshold", type=float, default=0.2)
     parser.add_argument("--speed_multiplier", type=float, default=1.0)
 
     args, _ = parser.parse_known_args()

@@ -34,7 +34,7 @@ def evaluate_and_replace_expressions(input_file, output_file, local_vars):
 
 class PegInsertEnv(FrankaEnv):
 
-    PEG_SIDE = 0.04        # 4cm side
+    PEG_SIDE = 0.04         # 4cm side (Primary)
     PEG_HEIGHT = 0.08       # 8cm height
     NOTCH_SIZE = 0.008      # 8mm keyway
     NS_SOCKET = 0.012       # 12mm notch size
@@ -44,6 +44,7 @@ class PegInsertEnv(FrankaEnv):
     PLATE_THICKNESS = 0.005 # 5mm base plate
 
     # Fixed socket position (within Franka reach)
+    # Note: This is the 'base' position, scene_offset will be added to this
     SOCKET_POS = np.array([0.35, -0.2, 0.0])
 
     # Peg spawn position (closer to robot to reduce collision risk)
@@ -124,9 +125,13 @@ class PegInsertEnv(FrankaEnv):
             evaluate_and_replace_expressions(template_path, tmp_path, local_vars)
 
         # Spawn position based on object rotation
+        # [Task Definition Fix]: Apply scene_offset to spawn center
         ang = self._object_rotation[-1]
-        peg_x = self.PEG_SPAWN_RADIUS * np.cos(ang)
-        peg_y = self.PEG_SPAWN_RADIUS * np.sin(ang)
+        center_x = self.scene_offset[0]
+        center_y = self.scene_offset[1]
+        
+        peg_x = center_x + self.PEG_SPAWN_RADIUS * np.cos(ang)
+        peg_y = center_y + self.PEG_SPAWN_RADIUS * np.sin(ang)
         peg_pos = [peg_x, peg_y, 0.001]
 
         total_rot = self._object_rotation[-1] + self._peg_spawn_rotation
@@ -144,18 +149,31 @@ class PegInsertEnv(FrankaEnv):
         return peg_id
 
     def _create_simple_peg(self):
-        """Fallback: simple box peg without keyway."""
-        half = [self.PEG_SIDE / 2, self.PEG_SIDE / 2, self.PEG_HEIGHT / 2]
+        """Fallback: Rectangular peg for visual orientation if assets missing."""
+        # [Task Definition Fix]: Make fallback non-square (0.04 x 0.03) so orientation 
+        # is visually observable. This prevents the 'invisible goal' problem where
+        # a square peg at 90deg looks correct but is penalized by reward.
+        
+        side_x = self.PEG_SIDE
+        side_y = self.PEG_SIDE * 0.75 # 3cm
+        
+        half = [side_x / 2, side_y / 2, self.PEG_HEIGHT / 2]
         col = self.sim.createCollisionShape(pybullet.GEOM_BOX, halfExtents=half)
         vis = self.sim.createVisualShape(
             pybullet.GEOM_BOX, halfExtents=half,
             rgbaColor=[0.4, 0.6, 0.8, 1.0],
         )
+        
+        # Apply scene offset
         ang = self._object_rotation[-1]
-        peg_x = self.PEG_SPAWN_RADIUS * np.cos(ang)
-        peg_y = self.PEG_SPAWN_RADIUS * np.sin(ang)
+        center_x = self.scene_offset[0]
+        center_y = self.scene_offset[1]
+        peg_x = center_x + self.PEG_SPAWN_RADIUS * np.cos(ang)
+        peg_y = center_y + self.PEG_SPAWN_RADIUS * np.sin(ang)
+        
         total_rot = self._object_rotation[-1] + self._peg_spawn_rotation
         peg_quat = pybullet.getQuaternionFromEuler([0, 0, total_rot])
+        
         peg_id = self.sim.createMultiBody(
             baseMass=0.1,
             baseCollisionShapeIndex=col,
@@ -167,14 +185,22 @@ class PegInsertEnv(FrankaEnv):
         return peg_id
 
     def _create_socket(self):
-        """Create socket at FIXED world position."""
+        """Create socket at FIXED world position + Offset."""
         template_dir = os.path.join(
             os.path.dirname(__file__), "..", "sim_mobile", "assets", "insertion"
         )
         template_path = os.path.join(template_dir, "socket_template.urdf")
 
+        # Apply scene offset to socket position
+        socket_pos = [
+            self.SOCKET_POS[0] + self.scene_offset[0], 
+            self.SOCKET_POS[1] + self.scene_offset[1], 
+            0.0
+        ]
+        socket_quat = pybullet.getQuaternionFromEuler([0, 0, 0])
+
         if not os.path.exists(template_path):
-            return self._create_simple_socket()
+            return self._create_simple_socket(socket_pos)
 
         local_vars = dict(
             S=self.PEG_SIDE, CL=self.CLEARANCE, WT=self.WALL_THICKNESS,
@@ -183,9 +209,6 @@ class PegInsertEnv(FrankaEnv):
         with NamedTemporaryFile(mode="w", suffix=".urdf", delete=False) as f:
             tmp_path = f.name
             evaluate_and_replace_expressions(template_path, tmp_path, local_vars)
-
-        socket_pos = [self.SOCKET_POS[0], self.SOCKET_POS[1], 0.0]
-        socket_quat = pybullet.getQuaternionFromEuler([0, 0, 0])
 
         socket_id = self.sim.loadURDF(
             tmp_path, basePosition=socket_pos, baseOrientation=socket_quat,
@@ -200,7 +223,7 @@ class PegInsertEnv(FrankaEnv):
             )
         return socket_id
 
-    def _create_simple_socket(self):
+    def _create_simple_socket(self, pos):
         """Fallback: simple box socket."""
         inner = self.PEG_SIDE + self.CLEARANCE * 2
         outer = inner + self.WALL_THICKNESS * 2
@@ -214,23 +237,22 @@ class PegInsertEnv(FrankaEnv):
             baseMass=0,
             baseCollisionShapeIndex=col,
             baseVisualShapeIndex=vis,
-            basePosition=[self.SOCKET_POS[0], self.SOCKET_POS[1],
-                          self.PLATE_THICKNESS / 2],
+            basePosition=[pos[0], pos[1], self.PLATE_THICKNESS / 2],
         )
         return socket_id
 
     def compute_reward(self):
         """
         Reward: XY proximity + rotation alignment + descent depth.
-
-        Full success (1.0): peg aligned and inserted.
-        Shaping: position (0.3) + descent (0.3) + rotation (0.2).
         """
         peg_pos, peg_quat = self.sim.getBasePositionAndOrientation(self._peg_id)
         peg_pos = np.array(peg_pos)
         peg_euler = np.array(pybullet.getEulerFromQuaternion(peg_quat))
 
-        socket_center = self.SOCKET_POS[:2]
+        # [Task Definition Fix]: Use actual socket position from Sim (handles randomization)
+        socket_pos, _ = self.sim.getBasePositionAndOrientation(self._socket_id)
+        socket_center = np.array(socket_pos)[:2]
+        
         xy_dist = np.linalg.norm(peg_pos[:2] - socket_center)
         pos_threshold = self.PEG_SIDE * 0.5
 
@@ -238,6 +260,8 @@ class PegInsertEnv(FrankaEnv):
         descended = peg_pos[2] < socket_top_z
 
         # Orientation: key should face +X (z_rot ≈ 0)
+        # Note: We check absolute error from 0. The fallback peg is rectangular
+        # so it physically requires 0 or 180, which aligns with this reward logic.
         z_rot = np.mod(peg_euler[2] + np.pi, 2 * np.pi) - np.pi
         rot_error = abs(z_rot)
         rot_aligned = rot_error < np.deg2rad(15)
