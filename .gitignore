@@ -37,6 +37,9 @@ multirun/
 data/
 *.npz
 *.npy
+data_rw/
+ping_pong_ball_free_fall/
+
 
 # Checkpoints
 *.pth

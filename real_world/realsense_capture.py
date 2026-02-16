@@ -20,13 +20,13 @@ def get_RGBD_image(output_dir):
     ctx = rs.context()
     if len(ctx.devices) > 0:
         for dev in ctx.devices:
-            print(f"Resetting device: {dev.get_info(rs.camera_info.name)}")
-            dev.hardware_reset()
+            print(f"Device: {dev.get_info(rs.camera_info.name)}")
+            # dev.hardware_reset()
     else:
         print("No device found to reset.")
     
-    print("Waiting for camera to reboot...")
-    time.sleep(10) 
+    # print("Waiting for camera to reboot...")
+    # time.sleep(10) 
 
     pipeline = rs.pipeline()
     config = rs.config()

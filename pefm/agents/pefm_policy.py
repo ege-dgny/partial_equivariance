@@ -42,6 +42,7 @@ class PEFMPolicy(nn.Module):
         self.num_eef = cfg.env.num_eef
         self.eef_dim = cfg.env.eef_dim
         self.dof = cfg.env.dof
+        self.canonicalize = cfg.model.get("canonicalize", False)
 
         if cfg.model.obs_mode == "state":
             self.obs_dim = self.num_eef * self.eef_dim
@@ -146,6 +147,79 @@ class PEFMPolicy(nn.Module):
 
         obs_cond = z.reshape(batch_size, -1)
         return obs_cond
+
+    def _canonicalize_obs(self, pc, state):
+        """
+        Center and scale-normalize point clouds and states for
+        translation/scale invariance. Uses LAST obs frame's stats.
+
+        pc: (B, obs_h, P, 3)
+        state: (B, obs_h, num_eef * eef_dim)
+        Returns: pc_canon, state_canon, centroid (B, 1, 3), scale (B,)
+        """
+        B = pc.shape[0]
+        pc_last = pc[:, -1]                                    # (B, P, 3)
+        centroid = pc_last.mean(dim=1, keepdim=True)           # (B, 1, 3)
+
+        # Center all frames by last frame's centroid
+        pc_canon = pc - centroid[:, None]                      # (B, obs_h, P, 3)
+
+        # Scale = mean point norm in centered last frame
+        scale = pc_canon[:, -1].norm(dim=-1).mean(dim=-1)     # (B,)
+        scale = scale.clamp(min=1e-6)
+        pc_canon = pc_canon / scale[:, None, None, None]
+
+        # Canonicalize state position (indices 0:3 per EEF only)
+        state_canon = state.clone()
+        s = state_canon.view(B, self.obs_horizon, self.num_eef, self.eef_dim)
+        s[..., :3] = (s[..., :3] - centroid[:, None]) / scale[:, None, None, None]
+        state_canon = s.view(B, self.obs_horizon, -1)
+
+        return pc_canon, state_canon, centroid, scale
+
+    def _canonicalize_action(self, action, centroid, scale):
+        """
+        Canonicalize ground truth action for training.
+        Only position deltas are scaled. Rotation deltas and gripper unchanged.
+        """
+        B = action.shape[0]
+        ac = action.clone()
+        a = ac.view(B, self.pred_horizon, self.num_eef, self.dof)
+        s = scale[:, None, None, None]
+
+        if self.dof >= 4:
+            # dof=4: [gripper, dx, dy, dz], dof=7: [gripper, dx, dy, dz, drx, dry, drz]
+            if self.cfg.model.ac_mode == "abs":
+                a[..., 1:4] = (a[..., 1:4] - centroid[:, None]) / s
+            else:
+                a[..., 1:4] = a[..., 1:4] / s
+        elif self.dof == 3:
+            if self.cfg.model.ac_mode == "abs":
+                a[..., :3] = (a[..., :3] - centroid[:, None]) / s
+            else:
+                a[..., :3] = a[..., :3] / s
+
+        return ac.view(B, self.pred_horizon, -1)
+
+    def _uncanonicalize_action(self, action, centroid, scale):
+        """Inverse of _canonicalize_action for inference."""
+        B = action.shape[0]
+        ac = action.clone()
+        a = ac.view(B, self.pred_horizon, self.num_eef, self.dof)
+        s = scale[:, None, None, None]
+
+        if self.dof >= 4:
+            if self.cfg.model.ac_mode == "abs":
+                a[..., 1:4] = a[..., 1:4] * s + centroid[:, None]
+            else:
+                a[..., 1:4] = a[..., 1:4] * s
+        elif self.dof == 3:
+            if self.cfg.model.ac_mode == "abs":
+                a[..., :3] = a[..., :3] * s + centroid[:, None]
+            else:
+                a[..., :3] = a[..., :3] * s
+
+        return ac.view(B, self.pred_horizon, -1)
 
     def _pefm_velocity_batched(
         self, x_t, t_flat, obs_cond, g_samples, pc, state, encoder_module, vel_module
@@ -252,6 +326,11 @@ class PEFMPolicy(nn.Module):
         """
         batch_size = gt_action.shape[0]
 
+        # 0. Canonicalize for scale/translation invariance
+        if self.canonicalize:
+            pc, state, canon_centroid, canon_scale = self._canonicalize_obs(pc, state)
+            gt_action = self._canonicalize_action(gt_action, canon_centroid, canon_scale)
+
         # 1. Encode original observation (for selector)
         obs_cond = self._encode_obs(pc, state, self.encoder)
 
@@ -284,12 +363,16 @@ class PEFMPolicy(nn.Module):
         # 7. Total loss
         loss_total = loss_flow + loss_entropy
 
-        return loss_total, {
+        metrics = {
             "loss_flow": loss_flow.item(),
             "loss_entropy": loss_entropy.item(),
             "entropy": entropy.mean().item(),
             "loss_total": loss_total.item(),
         }
+        if self.canonicalize:
+            metrics["canon_scale_mean"] = canon_scale.mean().item()
+
+        return loss_total, metrics
 
     def forward(self, obs, debug=False):
         """
@@ -304,6 +387,12 @@ class PEFMPolicy(nn.Module):
         if self.obs_mode.startswith("pc"):
             pc = self.pc_normalizer.normalize(pc)
         state = self.state_normalizer.normalize(state)
+
+        # Canonicalize if enabled
+        canon_params = None
+        if self.canonicalize:
+            pc, state, canon_centroid, canon_scale = self._canonicalize_obs(pc, state)
+            canon_params = (canon_centroid, canon_scale)
 
         batch_size = pc.shape[0]
         ema_nets = self.ema.averaged_model
@@ -332,5 +421,11 @@ class PEFMPolicy(nn.Module):
             )
 
         predicted_actions = self.ode_solver.solve(pefm_velocity, x0)
+
+        # Un-canonicalize predicted actions
+        if canon_params is not None:
+            predicted_actions = self._uncanonicalize_action(
+                predicted_actions, *canon_params
+            )
 
         return dict(ac=predicted_actions)

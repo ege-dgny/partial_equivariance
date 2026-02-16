@@ -4,6 +4,8 @@ import cv2
 import os
 import time
 import json
+import argparse
+from typing import Optional
 
 
 def fix_permissions(path):
@@ -13,17 +15,51 @@ def fix_permissions(path):
         os.chown(path, int(sudo_uid), int(sudo_gid))
 
 
-def record_demos(base_output_dir, fps=6):
-    os.makedirs(base_output_dir, exist_ok=True)
-    fix_permissions(base_output_dir)
+def _default_data_rw_dir() -> str:
+    """
+    Default output root for real-world demos.
+
+    Resolves to: Partial_Equivariance/data_rw (one level above this file).
+    """
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data_rw"))
+
+
+def _next_episode_idx(base_output_dir: str) -> int:
+    """Pick the next non-existing episode index to avoid overwriting."""
+    idx = 0
+    while os.path.exists(os.path.join(base_output_dir, f"episode_{idx:03d}")):
+        idx += 1
+    return idx
+
+
+def record_demos(base_output_dir: str, fps: int = 6, data_rw_dir: Optional[str] = None):
+    """
+    Record raw RGB-D demos and save them under:
+      <data_rw_dir>/<task_name>/
+
+    This directory will contain:
+      - intrinsics.json
+      - episode_000/{color_*.png, depth_*.png}
+      - episode_001/...
+    """
+    if data_rw_dir is None:
+        data_rw_dir = _default_data_rw_dir()
+
+    # Backward-compatible API: the first argument is treated as the task name.
+    task_name = base_output_dir
+    output_dir = os.path.abspath(os.path.join(data_rw_dir, task_name))
+
+    os.makedirs(output_dir, exist_ok=True)
+    fix_permissions(output_dir)
+    print(f"Saving real-world demos to: {output_dir}")
 
     # --- Hardware reset ---
     ctx = rs.context()
     for dev in ctx.devices:
-        print(f"Resetting device: {dev.get_info(rs.camera_info.name)}")
-        dev.hardware_reset()
-    print("Waiting for camera to reboot...")
-    time.sleep(5)
+        print(f"Device: {dev.get_info(rs.camera_info.name)}")
+        # dev.hardware_reset()
+    # print("Waiting for camera to reboot...")
+    # time.sleep(5)
 
     # --- Configure streams ---
     pipeline = rs.pipeline()
@@ -49,14 +85,14 @@ def record_demos(base_output_dir, fps=6):
         "model": str(intr.model),
         "coeffs": intr.coeffs
     }
-    intrinsics_path = os.path.join(base_output_dir, "intrinsics.json")
+    intrinsics_path = os.path.join(output_dir, "intrinsics.json")
     with open(intrinsics_path, "w") as f:
         json.dump(intrinsics_data, f, indent=2)
     fix_permissions(intrinsics_path)
     print(f"Saved intrinsics to {intrinsics_path}")
 
     # --- Recording state ---
-    episode_idx = 0
+    episode_idx = _next_episode_idx(output_dir)
     frame_idx = 0
     recording = False
 
@@ -96,13 +132,18 @@ def record_demos(base_output_dir, fps=6):
 
             # --- Save if recording ---
             if recording:
-                ep_dir = os.path.join(base_output_dir, f"episode_{episode_idx:03d}")
+                ep_dir = os.path.join(output_dir, f"episode_{episode_idx:03d}")
 
                 depth_path = os.path.join(ep_dir, f"depth_{frame_idx:05d}.png")
                 color_path = os.path.join(ep_dir, f"color_{frame_idx:05d}.png")
 
-                cv2.imwrite(depth_path, depth_image)   # RAW 16-bit
-                cv2.imwrite(color_path, color_image)
+                ok_depth = cv2.imwrite(depth_path, depth_image)   # RAW 16-bit
+                ok_color = cv2.imwrite(color_path, color_image)
+                if not (ok_depth and ok_color):
+                    print(
+                        f"[WARN] Failed to write frame {frame_idx} "
+                        f"(depth_ok={ok_depth}, color_ok={ok_color}) to {ep_dir}"
+                    )
                 fix_permissions(depth_path)
                 fix_permissions(color_path)
 
@@ -114,7 +155,7 @@ def record_demos(base_output_dir, fps=6):
             if key == ord(' '):
                 if not recording:
                     ep_dir = os.path.join(
-                        base_output_dir, f"episode_{episode_idx:03d}"
+                        output_dir, f"episode_{episode_idx:03d}"
                     )
                     os.makedirs(ep_dir, exist_ok=True)
                     fix_permissions(ep_dir)
@@ -135,8 +176,29 @@ def record_demos(base_output_dir, fps=6):
         pipeline.stop()
         cv2.destroyAllWindows()
         total = episode_idx + (1 if recording else 0)
-        print(f"\nFinished. {total} episodes in {base_output_dir}/")
+        print(f"\nFinished. {total} episodes in {output_dir}/")
 
 
 if __name__ == "__main__":
-    record_demos(base_output_dir="book_shelf_demos", fps=6)
+    parser = argparse.ArgumentParser(description="Record raw RealSense RGB-D demos.")
+    parser.add_argument(
+        "--task_name",
+        type=str,
+        default="book_shelf",
+        help="Task name (demos saved under data_rw/<task_name>/).",
+    )
+    parser.add_argument(
+        "--fps",
+        type=int,
+        default=6,
+        help="Capture FPS for both color and depth streams.",
+    )
+    parser.add_argument(
+        "--data_rw_dir",
+        type=str,
+        default=None,
+        help="Override output root (default: Partial_Equivariance/data_rw).",
+    )
+    args = parser.parse_args()
+
+    record_demos(base_output_dir=args.task_name, fps=args.fps, data_rw_dir=args.data_rw_dir)

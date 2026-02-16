@@ -71,6 +71,7 @@ model:
   obs_mode: ${env.args.obs_mode}
   ac_mode: ${env.args.ac_mode}
   use_torch_compile: false
+  canonicalize: false    # scale/translation canonicalization (set true for new training)
 
   # PEFM symmetry selector
   symmetry:

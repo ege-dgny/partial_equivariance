@@ -297,6 +297,9 @@ class FrankaEnv:
             self._detach_grasp()
         else:
             self.robot.close_gripper()
+            # Stabilization steps: let fingers close before checking contact
+            for _ in range(10):
+                self.sim.stepSimulation()
             self._attach_grasp()
 
         # EEF velocity → target EEF pose
@@ -393,10 +396,10 @@ class FrankaEnv:
     # ------------------------------------------------------------------ #
 
     def _attach_grasp(self):
-        """Create constraint only when BOTH fingers contact object.
+        """Create constraint using contact detection with proximity fallback.
 
-        This replaces the previous proximity-based approach with actual
-        contact detection using PyBullet's getContactPoints().
+        Tries contact-based grasp first (accepts EITHER finger contact),
+        then falls back to proximity-based if no contacts are detected.
         """
         if self.constraint_id is not None:
             return
@@ -404,42 +407,34 @@ class FrankaEnv:
         robot_id = self.robot.info.robot_id
         finger_link_ids = self.robot.info.finger_link_ids
 
-        # Need both fingers for contact-based grasp
-        if len(finger_link_ids) < 2:
-            # Fallback to proximity-based for robots without 2 fingers
-            self._attach_grasp_proximity()
-            return
-
         graspable_ids = [
             oid for oid, g in zip(self.rigid_ids, self._rigid_graspable) if g
         ]
         if not graspable_ids:
             return
 
-        for obj_id in graspable_ids:
-            # Get contacts for each finger
-            left_contacts = self.sim.getContactPoints(
-                bodyA=robot_id, bodyB=obj_id,
-                linkIndexA=finger_link_ids[0]
-            )
-            right_contacts = self.sim.getContactPoints(
-                bodyA=robot_id, bodyB=obj_id,
-                linkIndexA=finger_link_ids[1]
-            )
+        # Try contact-based first (if fingers available)
+        if len(finger_link_ids) >= 2:
+            for obj_id in graspable_ids:
+                left_contacts = self.sim.getContactPoints(
+                    bodyA=robot_id, bodyB=obj_id,
+                    linkIndexA=finger_link_ids[0]
+                )
+                right_contacts = self.sim.getContactPoints(
+                    bodyA=robot_id, bodyB=obj_id,
+                    linkIndexA=finger_link_ids[1]
+                )
 
-            # Require BOTH fingers touching
-            if len(left_contacts) > 0 and len(right_contacts) > 0:
-                # Compute grasp center from contact points
-                # Contact tuple: [5] = positionOnB (world coords)
-                left_pts = [np.array(c[5]) for c in left_contacts]
-                right_pts = [np.array(c[5]) for c in right_contacts]
-                left_center = np.mean(left_pts, axis=0)
-                right_center = np.mean(right_pts, axis=0)
-                grasp_center = (left_center + right_center) / 2
+                # Accept if EITHER finger has contact (relaxed from both)
+                if len(left_contacts) > 0 or len(right_contacts) > 0:
+                    all_pts = [np.array(c[5]) for c in left_contacts] + \
+                              [np.array(c[5]) for c in right_contacts]
+                    grasp_center = np.mean(all_pts, axis=0)
+                    self._create_grasp_constraint_at(obj_id, grasp_center)
+                    return
 
-                # Create constraint at grasp center
-                self._create_grasp_constraint_at(obj_id, grasp_center)
-                return
+        # Fallback: proximity-based
+        self._attach_grasp_proximity()
 
     def _attach_grasp_proximity(self):
         """Fallback proximity-based grasp for robots without 2 finger links."""
@@ -474,7 +469,7 @@ class FrankaEnv:
             parentFramePosition=[0, 0, 0],
             childFramePosition=list(child_frame_pos),
         )
-        self.sim.changeConstraint(self.constraint_id, maxForce=2000)
+        self.sim.changeConstraint(self.constraint_id, maxForce=5000)
         self._grasped_obj_id = obj_id
 
     def _create_grasp_constraint_at(self, obj_id, world_grasp_point):
@@ -504,7 +499,7 @@ class FrankaEnv:
             parentFramePosition=list(parent_frame_pos),  # In EEF frame
             childFramePosition=list(child_frame_pos),    # In object frame
         )
-        self.sim.changeConstraint(self.constraint_id, maxForce=2000)
+        self.sim.changeConstraint(self.constraint_id, maxForce=5000)
         self._grasped_obj_id = obj_id
 
     def _detach_grasp(self):
@@ -514,7 +509,7 @@ class FrankaEnv:
             self.constraint_id = None
             self._grasped_obj_id = None
 
-    def _find_closest_graspable(self, ee_pos, obj_ids, max_dist=0.15):
+    def _find_closest_graspable(self, ee_pos, obj_ids, max_dist=0.08):
         """Find closest surface point on graspable objects."""
         best_dist = np.inf
         best_obj = None

@@ -49,6 +49,12 @@ def get_env_class(task_name):
     elif task_name == "cup_upright":
         from .cup_upright_env import CupUprightEnv
         return CupUprightEnv
+    elif task_name == "book_insert":
+        from .book_insert_env import BookInsertEnv
+        return BookInsertEnv
+    elif task_name == "push_t":
+        from .push_t_env import PushTEnv
+        return PushTEnv
     else:
         raise ValueError(f"Unknown task: {task_name}")
 
@@ -496,6 +502,46 @@ def run_demo(args, counter=0):
             object_center=np.array([cx, cy]),
         )
 
+    elif args.task_name == "book_insert":
+        book_pos, _ = env.sim.getBasePositionAndOrientation(env._book_id)
+        bx, by = book_pos[0], book_pos[1]
+        bt = env.BOOK_THICKNESS
+        bl = env.BOOK_LENGTH
+        # Target shelf position
+        sx, sy, sz = env._target_pos[0], env._target_pos[1], env._target_pos[2]
+        safe_z = 0.25
+
+        # 7-dim waypoints: (grip, x, y, z, roll, pitch, yaw)
+        # EEF default: gripper pointing down = roll=pi, pitch=0, yaw=0
+        sketch = [
+            # Phase 0 (object-relative): approach above book
+            (0, 0.0, 0.0, safe_z, np.pi, 0.0, 0.0),
+            # Phase 1 (object-relative): descend to book
+            (0, 0.0, 0.0, bt * 3.0, np.pi, 0.0, 0.0),
+            # Phase 2 (object-relative): grasp book (top-down pinch)
+            (1, 0.0, 0.0, bt * 1.5, np.pi, 0.0, 0.0),
+            # Phase 3 (object-relative): lift with book
+            (1, 0.0, 0.0, safe_z, np.pi, 0.0, 0.0),
+            # Phase 4 (world-frame): move toward shelf, reorient book to vertical
+            # Tilt EEF 90deg (pitch = pi/2) to hold book vertically
+            (1, sx, sy + 0.10, safe_z, np.pi, np.pi / 2, 0.0),
+            # Phase 5 (world-frame): approach shelf slot
+            (1, sx, sy + 0.05, sz, np.pi, np.pi / 2, 0.0),
+            # Phase 6 (world-frame): insert into shelf
+            (1, sx, sy, sz, np.pi, np.pi / 2, 0.0),
+            # Phase 7 (world-frame): release
+            (0, sx, sy, sz, np.pi, np.pi / 2, 0.0),
+        ]
+        # Phases 0-3 are object-relative, 4-7 are world-frame
+        object_phases = {0, 1, 2, 3}
+        sketch = split_and_rotate_sketch_7d(
+            sketch, object_phases, ang,
+            object_center=np.array([bx, by]),
+        )
+
+    elif args.task_name == "push_t":
+        sketch = None  # Push-T uses reactive policy below
+
     else:
         raise ValueError(f"Unknown task: {args.task_name}")
 
@@ -505,128 +551,211 @@ def run_demo(args, counter=0):
     sim_freq = env.freq
     num_sec_per_unit = 20.0 / args.speed_multiplier
 
-    # Check if this is a 7-dim sketch (with orientation)
-    use_orientation = is_7dim_sketch(sketch)
-
-    # Get initial EEF orientation if needed
-    if use_orientation:
-        ee_pos, ee_quat, _, _ = env.robot.get_ee_pos_quat_vel()
-        init_eef_euler = np.array(pybullet.getEulerFromQuaternion(ee_quat))
-    else:
-        init_eef_euler = np.array([np.pi, 0.0, 0.0])  # Default: gripper pointing down
-
-    # Execute sketch step by step
     t = 0
     record_t = 0
     imgs = []
     sim_unstable = False
-    curr_euler = init_eef_euler.copy()
 
-    for step_idx, step_target in enumerate(sketch):
-        if sim_unstable:
-            break
+    if args.task_name == "push_t":
+        # ---- Reactive Push-T policy ----
+        max_steps = args.max_episode_length * sim_freq
+        approach_dist = 0.06   # How far behind block to approach
+        push_speed = 0.3       # Push velocity magnitude
 
-        if use_orientation:
-            # 7-dim waypoint: (grip, x, y, z, roll, pitch, yaw)
-            grip = step_target[0]
-            tx, ty, tz = step_target[1:4]
-            target_euler = np.array(step_target[4:7])
-            prev_grip = init_grip if step_idx == 0 else sketch[step_idx - 1][0]
-
-            step_actions = plan_actions_with_orientation(
-                obs[0, :3], curr_euler, [(grip, tx, ty, tz, *target_euler)],
-                sim_freq, num_sec_per_unit=num_sec_per_unit,
-            )
-            # Update current euler for next waypoint
-            curr_euler = target_euler.copy()
-        else:
-            # 4-dim waypoint: (grip, x, y, z)
-            grip, tx, ty, tz = step_target
-            prev_grip = init_grip if step_idx == 0 else sketch[step_idx - 1][0]
-
-            step_actions = plan_actions_from_sketch(
-                obs[0], [(grip, tx, ty, tz)], prev_grip, sim_freq,
-                num_sec_per_unit=num_sec_per_unit,
-            )
-
-        for step_t, action_raw in enumerate(step_actions):
+        for t in range(max_steps):
             if sim_unstable:
                 break
 
-            # Convert absolute targets to velocities
-            grip_ac = action_raw[0]
-            target_pos = action_raw[1:4]
-            eef_vel = (target_pos - obs[0, :3]) * env.freq
-            eef_vel = np.clip(eef_vel, -1.0, 1.0)
+            block_pos, block_yaw = env.get_block_pose()
+            target_pos_2d = env.TARGET_POS
+            eef_pos = obs[0, :3]
 
-            if use_orientation and len(action_raw) >= 7:
-                # Get current EEF orientation and compute orientation velocity
-                ee_pos, ee_quat, _, _ = env.robot.get_ee_pos_quat_vel()
-                curr_eef_euler = np.array(pybullet.getEulerFromQuaternion(ee_quat))
-                target_euler = action_raw[4:7]
-                # Compute orientation velocity (wrap differences)
-                euler_diff = target_euler - curr_eef_euler
-                euler_diff = np.mod(euler_diff + np.pi, 2 * np.pi) - np.pi
-                ori_vel = euler_diff * env.freq
-                ori_vel = np.clip(ori_vel, -1.0, 1.0)
-                action = np.array([grip_ac, *eef_vel, *ori_vel])
+            # Compute desired push direction
+            pos_error = target_pos_2d - block_pos[:2]
+            pos_dist = np.linalg.norm(pos_error)
+            if pos_dist < 0.005:
+                push_dir = np.array([0.0, 0.0])
             else:
-                action = np.array([grip_ac, *eef_vel, 0.0, 0.0, 0.0])
+                push_dir = pos_error / pos_dist
+
+            # Approach point: behind the block opposite to push direction
+            approach_pt = block_pos[:2] - push_dir * approach_dist
+            eef_to_approach = approach_pt - eef_pos[:2]
+            eef_to_approach_dist = np.linalg.norm(eef_to_approach)
+
+            # State machine: approach if far, push if close
+            if eef_to_approach_dist > 0.02:
+                # Move to approach point (no contact)
+                vel_2d = eef_to_approach / max(eef_to_approach_dist, 1e-6) * min(push_speed, eef_to_approach_dist * sim_freq)
+            else:
+                # Push through block toward target
+                vel_2d = push_dir * push_speed
+
+            vel_2d = np.clip(vel_2d, -1.0, 1.0)
+            action = np.array([1.0, vel_2d[0], vel_2d[1], 0.0, 0.0, 0.0, 0.0])
 
             # Record
             should_record = (
                 t % args.cam_rec_interval == 0
                 if args.cam_rec_interval > 0
-                else (step_t == len(step_actions) - 1 or
-                      (step_idx == 0 and step_t == 0))
+                else t == 0
             )
             if should_record:
-                # Render point cloud from front camera
                 front_cam = env.default_front_camera.copy()
                 render_dict = env.render(
                     cam_config=front_cam,
-                    return_depth=True,
-                    return_pc=True,
-                    return_seg=True,
-                    resolution=240,
+                    return_depth=True, return_pc=True,
+                    return_seg=True, resolution=240,
                 )
-
                 pc = render_dict["pc"]
                 img = render_dict["images"][0][..., :3]
 
                 if len(pc) == 0:
                     sim_unstable = True
-                    print("Warning: no point cloud; cutting episode short.")
                     break
-
                 if np.min(pc[:, 2]) < -0.05 or np.max(pc[:, 2]) > 1.0:
                     sim_unstable = True
-                    print("Warning: simulation unstable; cutting episode.")
                     break
 
-                # Subsample point cloud
                 num_points = 4096
                 if len(pc) >= num_points:
                     idx = np.random.choice(len(pc), size=num_points, replace=False)
                     pc = pc[idx]
 
                 img_name = f"{prefix}_ep{counter:06d}_view0_t{record_t:02d}"
-                save_path = os.path.join(
-                    args.data_out_dir, "pcs", f"{img_name}.npz"
-                )
-                np.savez(
-                    save_path, pc=pc, rgb=img, action=action, eef_pos=obs,
-                )
+                save_path = os.path.join(args.data_out_dir, "pcs", f"{img_name}.npz")
+                np.savez(save_path, pc=pc, rgb=img, action=action, eef_pos=obs)
                 saved_files.append(save_path)
 
-                # Record dual-view frame for video
                 dual_frame = env.render_dual(resolution=240)
                 imgs.append(dual_frame)
-
                 record_t += 1
 
             obs, _, _, _ = env.step(action, dummy_reward=True)
-            t += 1
+
+            # Early termination if block is at target
+            if env.compute_reward() >= 0.95:
+                break
+
+    else:
+        # ---- Sketch-based execution (all other tasks) ----
+        # Check if this is a 7-dim sketch (with orientation)
+        use_orientation = is_7dim_sketch(sketch)
+
+        # Get initial EEF orientation if needed
+        if use_orientation:
+            ee_pos, ee_quat, _, _ = env.robot.get_ee_pos_quat_vel()
+            init_eef_euler = np.array(pybullet.getEulerFromQuaternion(ee_quat))
+        else:
+            init_eef_euler = np.array([np.pi, 0.0, 0.0])  # Default: gripper pointing down
+
+        curr_euler = init_eef_euler.copy()
+
+        for step_idx, step_target in enumerate(sketch):
+            if sim_unstable:
+                break
+
+            if use_orientation:
+                # 7-dim waypoint: (grip, x, y, z, roll, pitch, yaw)
+                grip = step_target[0]
+                tx, ty, tz = step_target[1:4]
+                target_euler = np.array(step_target[4:7])
+                prev_grip = init_grip if step_idx == 0 else sketch[step_idx - 1][0]
+
+                step_actions = plan_actions_with_orientation(
+                    obs[0, :3], curr_euler, [(grip, tx, ty, tz, *target_euler)],
+                    sim_freq, num_sec_per_unit=num_sec_per_unit,
+                )
+                # Update current euler for next waypoint
+                curr_euler = target_euler.copy()
+            else:
+                # 4-dim waypoint: (grip, x, y, z)
+                grip, tx, ty, tz = step_target
+                prev_grip = init_grip if step_idx == 0 else sketch[step_idx - 1][0]
+
+                step_actions = plan_actions_from_sketch(
+                    obs[0], [(grip, tx, ty, tz)], prev_grip, sim_freq,
+                    num_sec_per_unit=num_sec_per_unit,
+                )
+
+            for step_t, action_raw in enumerate(step_actions):
+                if sim_unstable:
+                    break
+
+                # Convert absolute targets to velocities
+                grip_ac = action_raw[0]
+                target_pos = action_raw[1:4]
+                eef_vel = (target_pos - obs[0, :3]) * env.freq
+                eef_vel = np.clip(eef_vel, -1.0, 1.0)
+
+                if use_orientation and len(action_raw) >= 7:
+                    # Get current EEF orientation and compute orientation velocity
+                    ee_pos, ee_quat, _, _ = env.robot.get_ee_pos_quat_vel()
+                    curr_eef_euler = np.array(pybullet.getEulerFromQuaternion(ee_quat))
+                    target_euler = action_raw[4:7]
+                    # Compute orientation velocity (wrap differences)
+                    euler_diff = target_euler - curr_eef_euler
+                    euler_diff = np.mod(euler_diff + np.pi, 2 * np.pi) - np.pi
+                    ori_vel = euler_diff * env.freq
+                    ori_vel = np.clip(ori_vel, -1.0, 1.0)
+                    action = np.array([grip_ac, *eef_vel, *ori_vel])
+                else:
+                    action = np.array([grip_ac, *eef_vel, 0.0, 0.0, 0.0])
+
+                # Record
+                should_record = (
+                    t % args.cam_rec_interval == 0
+                    if args.cam_rec_interval > 0
+                    else (step_t == len(step_actions) - 1 or
+                          (step_idx == 0 and step_t == 0))
+                )
+                if should_record:
+                    # Render point cloud from front camera
+                    front_cam = env.default_front_camera.copy()
+                    render_dict = env.render(
+                        cam_config=front_cam,
+                        return_depth=True,
+                        return_pc=True,
+                        return_seg=True,
+                        resolution=240,
+                    )
+
+                    pc = render_dict["pc"]
+                    img = render_dict["images"][0][..., :3]
+
+                    if len(pc) == 0:
+                        sim_unstable = True
+                        print("Warning: no point cloud; cutting episode short.")
+                        break
+
+                    if np.min(pc[:, 2]) < -0.05 or np.max(pc[:, 2]) > 1.0:
+                        sim_unstable = True
+                        print("Warning: simulation unstable; cutting episode.")
+                        break
+
+                    # Subsample point cloud
+                    num_points = 4096
+                    if len(pc) >= num_points:
+                        idx = np.random.choice(len(pc), size=num_points, replace=False)
+                        pc = pc[idx]
+
+                    img_name = f"{prefix}_ep{counter:06d}_view0_t{record_t:02d}"
+                    save_path = os.path.join(
+                        args.data_out_dir, "pcs", f"{img_name}.npz"
+                    )
+                    np.savez(
+                        save_path, pc=pc, rgb=img, action=action, eef_pos=obs,
+                    )
+                    saved_files.append(save_path)
+
+                    # Record dual-view frame for video
+                    dual_frame = env.render_dual(resolution=240)
+                    imgs.append(dual_frame)
+
+                    record_t += 1
+
+                obs, _, _, _ = env.step(action, dummy_reward=True)
+                t += 1
 
     # Evaluate
     final_rew = env.compute_reward()
@@ -661,6 +790,16 @@ def run_demo(args, counter=0):
         uprightness = np.dot(cup_z_axis, [0, 0, 1])
         tilt_deg = np.degrees(np.arccos(np.clip(uprightness, -1, 1)))
         print(f"Reward: {final_rew:.3f} | cup: [{cup_pos[0]:.3f}, {cup_pos[1]:.3f}, {cup_pos[2]:.3f}] | tilt: {tilt_deg:.1f}deg | target: [{env.TARGET_POS[0]:.2f}, {env.TARGET_POS[1]:.2f}]")
+    elif task == "book_insert":
+        book_pos, book_quat = env.sim.getBasePositionAndOrientation(env._book_id)
+        rot_mat = np.array(env.sim.getMatrixFromQuaternion(book_quat)).reshape(3, 3)
+        book_z = rot_mat[:, 2]
+        vert = abs(np.dot(book_z, [0, 0, 1]))
+        print(f"Reward: {final_rew:.3f} | book: [{book_pos[0]:.3f}, {book_pos[1]:.3f}, {book_pos[2]:.3f}] | vert: {vert:.2f} | target: [{env._target_pos[0]:.2f}, {env._target_pos[1]:.2f}, {env._target_pos[2]:.2f}]")
+    elif task == "push_t":
+        block_pos, block_yaw = env.get_block_pose()
+        xy_dist = np.linalg.norm(block_pos[:2] - env.TARGET_POS)
+        print(f"Reward: {final_rew:.3f} | block: [{block_pos[0]:.3f}, {block_pos[1]:.3f}] | yaw: {np.degrees(block_yaw):.1f}deg | xy_dist: {xy_dist:.3f} | target: [{env.TARGET_POS[0]:.2f}, {env.TARGET_POS[1]:.2f}]")
     else:
         print(f"Reward: {final_rew:.3f}")
 
@@ -695,7 +834,7 @@ def get_args():
     parser.add_argument(
         "--task_name", type=str, default="pick_place",
         choices=["pick_place", "peg_insert", "centering", "orient_place", "stack",
-                 "position_insert", "cup_upright"],
+                 "position_insert", "cup_upright", "book_insert", "push_t"],
     )
     # Seeds
     parser.add_argument("--seed", type=int, default=0)
