@@ -112,5 +112,5 @@ hydra:
     dir: ${log_dir}/${prefix}
 
 wandb:
-  entity: egedoganay
+  entity: null
   project: pefm
