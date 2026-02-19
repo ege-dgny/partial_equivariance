@@ -239,7 +239,9 @@ def main(cfg):
         ckpt_name = ckpt_path.split("/")[-1].split(".")[0]
         agent.load_snapshot(ckpt_path)
 
-        log_dir = os.getcwd()
+        from hydra.core.hydra_config import HydraConfig
+        log_dir = HydraConfig.get().runtime.output_dir
+        os.makedirs(log_dir, exist_ok=True)
 
         eval_metrics = eval_fn(
             env,
@@ -260,7 +262,7 @@ def main(cfg):
             )
         else:
             save_filename = os.path.join(
-                os.getcwd(), f"vis_{ckpt_name}_rew{mean_rew:.3f}.mp4"
+                log_dir, f"vis_{ckpt_name}_rew{mean_rew:.3f}.mp4"
             )
         if "vis_rollout" in eval_metrics:
             if len(eval_metrics["vis_rollout"].shape) == 4:
@@ -270,12 +272,12 @@ def main(cfg):
                 for eval_idx, eval_video in enumerate(eval_metrics["vis_rollout"]):
                     episode_rew = eval_metrics["rew_values"][eval_idx]
                     save_filename = os.path.join(
-                        os.getcwd(),
+                        log_dir,
                         f"vis_{ckpt_name}_ep{eval_idx}_rew{episode_rew:.3f}.mp4",
                     )
                     save_video(eval_video, save_filename)
         del eval_metrics
-    np.savez(os.path.join(os.getcwd(), "info.npz"), rews=np.array(rew_list))
+    np.savez(os.path.join(log_dir, "info.npz"), rews=np.array(rew_list))
 
 
 if __name__ == "__main__":

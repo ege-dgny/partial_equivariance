@@ -36,7 +36,9 @@ def main(cfg):
             settings=wandb.Settings(code_dir="."),
             config=wandb_config,
         )
-    log_dir = os.getcwd()
+    from hydra.core.hydra_config import HydraConfig
+    log_dir = HydraConfig.get().runtime.output_dir
+    os.makedirs(log_dir, exist_ok=True)
 
     train_dataset = get_dataset(cfg, "train")
     num_workers = cfg.data.dataset.num_workers

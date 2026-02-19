@@ -106,6 +106,8 @@ eval:
   num_ckpts_to_eval: 5
 
 hydra:
+  job:
+    chdir: false
   run:
     dir: ${log_dir}/${prefix}
 
