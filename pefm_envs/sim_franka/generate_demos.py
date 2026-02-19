@@ -146,7 +146,7 @@ def plan_actions_from_sketch(init_eef_pos, sketch, init_grip, sim_freq,
 
 
 def plan_actions_with_orientation(init_pos, init_euler, waypoints, sim_freq,
-                                   num_sec_per_unit=2.0):
+                                   num_sec_per_unit=2.0, init_grip=0.0):
     """
     Convert 7-dim waypoints into action sequence with orientation control.
 
@@ -166,7 +166,7 @@ def plan_actions_with_orientation(init_pos, init_euler, waypoints, sim_freq,
     curr_pos = np.array(init_pos).copy()
     curr_euler = np.array(init_euler).copy()
     actions = []
-    prev_grip = 0.0
+    prev_grip = init_grip
 
     for waypoint in waypoints:
         grip = waypoint[0]
@@ -336,25 +336,27 @@ def run_demo(args, counter=0):
         grasp_z = peg_h * 0.5  # Peg center height
         safe_z = 0.30  # Safe height to avoid collisions during lateral moves
 
+        # Use 7D waypoints so gripper yaw follows peg initialization during grasp.
+        # Format: (grip, x, y, z, roll, pitch, yaw), with gripper-down base pose.
         sketch = [
             # Phase 0 (world-frame): first go to safe height near home X
             # This avoids collision during the initial approach
-            (0, 0.35, 0.0, safe_z),
+            (0, 0.35, 0.0, safe_z, np.pi, 0.0, 0.0),
             # Phase 1 (object-relative): approach above peg at safe height
-            (0, 0.0, 0.0, safe_z),
+            (0, 0.0, 0.0, safe_z, np.pi, 0.0, 0.0),
             # Phase 2 (object-relative): descend to just above peg
-            (0, 0.0, 0.0, peg_h * 2.5),
+            (0, 0.0, 0.0, peg_h * 2.5, np.pi, 0.0, 0.0),
             # Phase 3 (object-relative): descend to grasp
-            (1, 0.0, 0.0, grasp_z),
+            (1, 0.0, 0.0, grasp_z, np.pi, 0.0, 0.0),
             # Phase 4 (object-relative): lift
-            (1, 0.0, 0.0, safe_z),
+            (1, 0.0, 0.0, safe_z, np.pi, 0.0, 0.0),
             # Phase 5 (world-frame): move over socket
-            (1, sx, sy, safe_z),
+            (1, sx, sy, safe_z, np.pi, 0.0, 0.0),
             # Phase 6 (world-frame): insert into socket
-            (1, sx, sy, insert_z),
+            (1, sx, sy, insert_z, np.pi, 0.0, 0.0),
         ]
         object_phases = {1, 2, 3, 4}  # Phases that are object-relative
-        sketch = split_and_rotate_sketch(
+        sketch = split_and_rotate_sketch_7d(
             sketch, object_phases, ang,
             object_center=np.array([px, py]),
         )
@@ -664,7 +666,7 @@ def run_demo(args, counter=0):
 
                 step_actions = plan_actions_with_orientation(
                     obs[0, :3], curr_euler, [(grip, tx, ty, tz, *target_euler)],
-                    sim_freq, num_sec_per_unit=num_sec_per_unit,
+                    sim_freq, num_sec_per_unit=num_sec_per_unit, init_grip=prev_grip,
                 )
                 # Update current euler for next waypoint
                 curr_euler = target_euler.copy()
@@ -857,7 +859,7 @@ def get_args():
     # Data
     parser.add_argument("--num_demos", type=int, default=1)
     parser.add_argument("--data_out_dir", type=str, default=None)
-    parser.add_argument("--data_rew_threshold", type=float, default=0.2)
+    parser.add_argument("--data_rew_threshold", type=float, default=0.5)
     parser.add_argument("--speed_multiplier", type=float, default=1.0)
 
     args, _ = parser.parse_known_args()

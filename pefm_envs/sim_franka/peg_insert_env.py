@@ -37,8 +37,8 @@ class PegInsertEnv(FrankaEnv):
     PEG_SIDE = 0.04         # 4cm side (Primary)
     PEG_HEIGHT = 0.08       # 8cm height
     NOTCH_SIZE = 0.008      # 8mm keyway
-    NS_SOCKET = 0.012       # 12mm notch size
-    CLEARANCE = 0.002       # 2mm clearance
+    NS_SOCKET = 0.014       # 12mm notch size
+    CLEARANCE = 0.008       # 2mm clearance
     WALL_THICKNESS = 0.01   # 1cm guide walls
     WALL_HEIGHT = 0.04      # 4cm wall height
     PLATE_THICKNESS = 0.005 # 5mm base plate

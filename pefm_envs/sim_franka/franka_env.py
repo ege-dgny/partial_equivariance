@@ -321,13 +321,23 @@ class FrankaEnv:
         # Clamp Z to avoid going below table
         target_pos[2] = max(target_pos[2], 0.005)
 
-        # Orientation delta (axis-angle in radians)
+        # Target orientation
         if np.linalg.norm(ori_vel) > 1e-6:
-            ori_delta = ori_vel * dt
+            ori_delta = ori_vel * dt  # axis-angle in radians
+            delta_quat = axisangle2quat(ori_delta)
+            target_quat = quat_multiply(delta_quat, ee_quat)
         else:
-            ori_delta = None
+            target_quat = ee_quat
 
-        # Cartesian interpolation: straight-line EE motion with correct finger state
+        # Single IK solve → joint-space interpolation.
+        # Solving IK once and interpolating qpos gives stable, consistent
+        # motion without the orientation drift caused by per-sub-step IK
+        # (the 7-DOF Franka is redundant, so repeated IK calls find
+        # subtly different solutions).
+        target_qpos = self.robot.ee_pos_to_qpos(
+            target_pos, target_quat, fing_dist=fing_dist
+        )
+
         steps_per_action = self.SIM_FREQ // self.freq
         if self.demo_mode:
             kp_val = 5.0
@@ -336,32 +346,21 @@ class FrankaEnv:
             kp_val = None  # use robot defaults
             kd_val = None
 
-        for st in range(steps_per_action):
-            alpha = (st + 1) / steps_per_action
-
-            # Linear position interpolation
-            interp_pos = ee_pos + alpha * (target_pos - ee_pos)
-
-            # Orientation interpolation (fractional axis-angle rotation)
-            if ori_delta is not None:
-                frac_delta_quat = axisangle2quat(ori_delta * alpha)
-                interp_quat = quat_multiply(frac_delta_quat, ee_quat)
-            else:
-                interp_quat = ee_quat
-
-            # Solve IK with correct finger distance
-            target_qpos = self.robot.ee_pos_to_qpos(
-                interp_pos, interp_quat, fing_dist=fing_dist
-            )
-
-            if target_qpos is not None:
+        if target_qpos is not None:
+            curr_qpos = self.robot.get_qpos()
+            for st in range(steps_per_action):
+                alpha = (st + 1) / steps_per_action
+                interp_qpos = curr_qpos + alpha * (target_qpos - curr_qpos)
                 self.robot.move_to_qpos(
-                    target_qpos, mode=pybullet.POSITION_CONTROL,
+                    interp_qpos, mode=pybullet.POSITION_CONTROL,
                     kp=kp_val, kd=kd_val,
                 )
-
-            self.sim.stepSimulation()
-            self._internal_t += 1
+                self.sim.stepSimulation()
+                self._internal_t += 1
+        else:
+            for _ in range(steps_per_action):
+                self.sim.stepSimulation()
+                self._internal_t += 1
 
         # After the full motion (72 sub-steps), fingers have had time to
         # close and make contact. Now try to create the grasp constraint.
