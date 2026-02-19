@@ -259,7 +259,7 @@ class BaseDataset(Dataset):
                             + offset[None]
                         )
                         eef_pos[:, 3:6] = rotate_around_z(eef_pos[:, 3:6], rot)
-                        eef_pos[:, 6:9] = rotate_around_z(eef_pos[:, 3:6], rot)
+                        eef_pos[:, 6:9] = rotate_around_z(eef_pos[:, 6:9], rot)
                         if self.eef_dim == 16:
                             eef_pos[:, 13:16] = (
                                 rotate_around_z(eef_pos[:, 0:3], rot, center, scale)

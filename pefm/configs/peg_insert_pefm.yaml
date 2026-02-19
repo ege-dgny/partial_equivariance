@@ -11,7 +11,7 @@ env:
 model:
   symmetry:
     group_type: c4
-    distribution_type: gumbel_softmax
+    distribution_type: gumbel_categorical
     num_samples: 4
     entropy_weight: 0.01
     gumbel_tau: 1.0
