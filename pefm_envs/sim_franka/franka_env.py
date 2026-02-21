@@ -73,6 +73,15 @@ class FrankaEnv:
         self._done = None
         self._last_action_time = None
         self._grasped_obj_id = None
+        self._gripper_target_closed = False
+        self._close_cmd_steps = 0
+
+        # Grasp gating: avoid accidental "air-grasp" attachments.
+        self.grip_close_cmd_thresh = getattr(args, "grip_close_cmd_thresh", 0.9)
+        self.grip_open_cmd_thresh = getattr(args, "grip_open_cmd_thresh", 0.1)
+        self.grasp_attach_max_dist = getattr(args, "grasp_attach_max_dist", 0.03)
+        self.grasp_min_closed_dist = getattr(args, "grasp_min_closed_dist", 0.02)
+        self.grasp_close_dwell_steps = getattr(args, "grasp_close_dwell_steps", 2)
 
         # Initialize simulation
         self._init_sim()
@@ -284,6 +293,8 @@ class FrankaEnv:
         self._ac_noise_multiplier = self.rng.rand()
         self.constraint_id = None
         self._grasped_obj_id = None
+        self._gripper_target_closed = False
+        self._close_cmd_steps = 0
         self._randomize_object_scales()
         self._setup_sim()
         self._done = False
@@ -301,12 +312,17 @@ class FrankaEnv:
 
         # Gripper: determine finger distance for IK
         grip_action = action[0, 0]
-        gripper_closing = grip_action >= 0.5
+        if grip_action >= self.grip_close_cmd_thresh:
+            self._gripper_target_closed = True
+        elif grip_action <= self.grip_open_cmd_thresh:
+            self._gripper_target_closed = False
 
-        if gripper_closing:
+        if self._gripper_target_closed:
             fing_dist = 0.0  # fingers closed
+            self._close_cmd_steps += 1
         else:
             fing_dist = self.robot.get_max_fing_dist()  # fingers open
+            self._close_cmd_steps = 0
             self._detach_grasp()
 
         # EEF velocity → target EEF pose
@@ -364,8 +380,13 @@ class FrankaEnv:
 
         # After the full motion (72 sub-steps), fingers have had time to
         # close and make contact. Now try to create the grasp constraint.
-        if gripper_closing and self.constraint_id is None:
-            self._attach_grasp()
+        if (
+            self._gripper_target_closed
+            and self.constraint_id is None
+            and self._close_cmd_steps >= self.grasp_close_dwell_steps
+            and self.robot.get_fing_dist() <= self.grasp_min_closed_dist
+        ):
+            self._attach_grasp(max_dist=self.grasp_attach_max_dist)
 
         # Realtime sleep for visualization
         if self.vis and self._last_action_time is not None:
@@ -426,7 +447,23 @@ class FrankaEnv:
                         robot_id, oid, link_idx, -1, 0
                     )
 
-    def _attach_grasp(self):
+    def _get_grasp_reference_pos(self):
+        """Estimate pinch center from finger link frames (fallback to EE)."""
+        finger_link_ids = getattr(self.robot.info, "finger_link_ids", [])
+        if len(finger_link_ids) >= 2:
+            points = []
+            for link_id in finger_link_ids[:2]:
+                link_state = self.sim.getLinkState(
+                    self.robot.info.robot_id,
+                    int(link_id),
+                    computeForwardKinematics=1,
+                )
+                points.append(np.array(link_state[4]))
+            if len(points) == 2:
+                return 0.5 * (points[0] + points[1])
+        return self.robot.get_ee_pos()
+
+    def _attach_grasp(self, max_dist=None):
         """Find the closest graspable object and lock it to the EE.
 
         Uses geometric (mesh vertex) distance — works regardless of
@@ -441,9 +478,11 @@ class FrankaEnv:
         if not graspable_ids:
             return
 
-        ee_pos = self.robot.get_ee_pos()
+        if max_dist is None:
+            max_dist = self.grasp_attach_max_dist
+        ee_pos = self._get_grasp_reference_pos()
         target_obj_id, _ = self._find_closest_graspable(
-            ee_pos, graspable_ids, max_dist=0.08
+            ee_pos, graspable_ids, max_dist=max_dist
         )
 
         if target_obj_id is not None:
@@ -493,7 +532,7 @@ class FrankaEnv:
             self.constraint_id = None
             self._grasped_obj_id = None
 
-    def _find_closest_graspable(self, ee_pos, obj_ids, max_dist=0.08):
+    def _find_closest_graspable(self, ee_pos, obj_ids, max_dist=0.03):
         """Find closest graspable object using geometric mesh distance."""
         best_dist = np.inf
         best_obj = None

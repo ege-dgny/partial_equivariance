@@ -24,6 +24,7 @@ env:
     max_episode_length: ???
     num_points: ${data.dataset.num_points}
     randomize_rotation: true
+    demo_mode: false
     randomize_scale: false
     scale_low: 1.0
     scale_high: 1.0
