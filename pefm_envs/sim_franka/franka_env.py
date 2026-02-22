@@ -81,7 +81,7 @@ class FrankaEnv:
         self.grip_open_cmd_thresh = getattr(args, "grip_open_cmd_thresh", 0.1)
         self.grasp_attach_max_dist = getattr(args, "grasp_attach_max_dist", 0.03)
         self.grasp_min_closed_dist = getattr(args, "grasp_min_closed_dist", 0.02)
-        self.grasp_close_dwell_steps = getattr(args, "grasp_close_dwell_steps", 2)
+        self.grasp_close_dwell_steps = getattr(args, "grasp_close_dwell_steps", 3)
 
         # Initialize simulation
         self._init_sim()
@@ -385,6 +385,7 @@ class FrankaEnv:
             and self.constraint_id is None
             and self._close_cmd_steps >= self.grasp_close_dwell_steps
             and self.robot.get_fing_dist() <= self.grasp_min_closed_dist
+            and self._grasp_within_object_z()
         ):
             self._attach_grasp(max_dist=self.grasp_attach_max_dist)
 
@@ -434,9 +435,12 @@ class FrankaEnv:
         """Disable collisions between robot and all graspable objects.
 
         Called once at scene setup. The Panda URDF's collision meshes are
-        convex hulls much larger than the visual geometry, creating an
-        invisible force field that knocks objects over during approach.
-        Since grasping is constraint-based, physical contact is not needed.
+        convex hulls much larger than the visual geometry (including the
+        finger links), causing objects to be pushed away or to penetrate
+        the hand during approach. Since grasping is constraint-based,
+        physical contact is not needed. Finger proximity is verified via
+        getClosestPoints (a geometry query independent of collision filters)
+        before any constraint is created.
         """
         robot_id = self.robot.info.robot_id
         num_robot_links = self.sim.getNumJoints(robot_id)
@@ -462,6 +466,27 @@ class FrankaEnv:
             if len(points) == 2:
                 return 0.5 * (points[0] + points[1])
         return self.robot.get_ee_pos()
+
+    def _grasp_within_object_z(self):
+        """Check that the grasp reference point is within a graspable object's Z extent.
+
+        Prevents constraint creation when the EE is still above or below the
+        object during approach.  Uses mesh vertices for the Z bounds so it works
+        regardless of collision filter state.
+        """
+        ee_pos = self._get_grasp_reference_pos()
+        margin = self.grasp_attach_max_dist
+        for oid, graspable in zip(self.rigid_ids, self._rigid_graspable):
+            if not graspable:
+                continue
+            mesh = self._get_rigid_body_mesh(oid)
+            if mesh.size == 0:
+                continue
+            z_min = mesh[:, 2].min()
+            z_max = mesh[:, 2].max()
+            if z_min - margin <= ee_pos[2] <= z_max + margin:
+                return True
+        return False
 
     def _attach_grasp(self, max_dist=None):
         """Find the closest graspable object and lock it to the EE.
