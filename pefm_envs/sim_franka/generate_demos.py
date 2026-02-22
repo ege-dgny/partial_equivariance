@@ -11,6 +11,7 @@ Records 2-camera views (front + side) stitched side-by-side.
 import os
 import sys
 import cv2
+import re
 import logging
 import argparse
 import numpy as np
@@ -820,6 +821,21 @@ def run_demo(args, counter=0):
         return 0
 
 
+def get_next_episode_index(data_out_dir):
+    """Return next episode index by scanning existing saved demos."""
+    images_dir = os.path.join(data_out_dir, "images")
+    if not os.path.isdir(images_dir):
+        return 0
+
+    pattern = re.compile(r"_ep(\d{6})\.mp4$")
+    max_idx = -1
+    for name in os.listdir(images_dir):
+        match = pattern.search(name)
+        if match:
+            max_idx = max(max_idx, int(match.group(1)))
+    return max_idx + 1
+
+
 # ------------------------------------------------------------------ #
 #  CLI
 # ------------------------------------------------------------------ #
@@ -875,13 +891,14 @@ def main():
     seed = args.seed
     seed_env = args.seed_env
 
+    start_idx = get_next_episode_index(args.data_out_dir)
     num_success = 0
     for i in range(args.num_demos * 10):
         if num_success >= args.num_demos:
             break
         args.seed = (seed * 99999 + i) % 100001
         args.seed_env = (seed_env * 99999 + i) % 100001
-        success = run_demo(args, i)
+        success = run_demo(args, start_idx + num_success)
         if success:
             num_success += 1
             print(f"[{num_success}/{args.num_demos}] demos completed")
