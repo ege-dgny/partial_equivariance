@@ -12,7 +12,7 @@ import numpy as np
 import torch
 from torch import nn
 
-from pefm.utils.norm import Normalizer
+from pefm.utils.norm import Normalizer, RotationAwareNormalizer
 from pefm.utils.misc import to_torch
 from pefm.agents.pefm_policy import PEFMPolicy
 from pefm.utils.lr_scheduler import get_scheduler
@@ -55,21 +55,54 @@ class PEFMAgent(object):
         self.actor.ema.averaged_model.to(self.cfg.device)
 
     def _init_normalizers(self, batch):
+        use_rot_aware = self.cfg.model.get("rotation_aware_norm", False)
+
         if self.obs_mode.startswith("pc") and self.pc_normalizer is None:
             flattened_pc = batch["pc"].view(-1, 3)
-            self.pc_normalizer = Normalizer(flattened_pc)
+            if use_rot_aware:
+                self.pc_normalizer = RotationAwareNormalizer(
+                    flattened_pc, coupled_groups=[[0, 1]]
+                )
+            else:
+                self.pc_normalizer = Normalizer(flattened_pc)
             self.actor.pc_normalizer = self.pc_normalizer
             print(f"PC normalization stats: {self.pc_normalizer.stats}")
+
         if self.state_normalizer is None:
             state = batch["eef_pos"]
             flattened_state = state.view(-1, state.shape[-1])
-            self.state_normalizer = Normalizer(flattened_state)
+            if use_rot_aware:
+                eef_dim = self.cfg.env.eef_dim
+                state_coupled = []
+                for eef_idx in range(self.num_eef):
+                    off = eef_idx * eef_dim
+                    state_coupled.append([off + 0, off + 1])    # pos XY
+                    state_coupled.append([off + 3, off + 4])    # xdir XY
+                    state_coupled.append([off + 6, off + 7])    # zdir XY
+                    state_coupled.append([off + 9, off + 10])   # grav XY
+                self.state_normalizer = RotationAwareNormalizer(
+                    flattened_state, coupled_groups=state_coupled
+                )
+            else:
+                self.state_normalizer = Normalizer(flattened_state)
             self.actor.state_normalizer = self.state_normalizer
             print(f"State normalization stats: {self.state_normalizer.stats}")
+
         if self.ac_normalizer is None:
             gt_action = batch["action"]
             flattened_gt_action = gt_action.view(-1, gt_action.shape[-1])
-            self.ac_normalizer = Normalizer(flattened_gt_action)
+            if use_rot_aware:
+                ac_coupled = []
+                for eef_idx in range(self.num_eef):
+                    off = eef_idx * self.dof
+                    ac_coupled.append([off + 1, off + 2])       # vel XY
+                    if self.dof >= 7:
+                        ac_coupled.append([off + 4, off + 5])   # rot-vel XY
+                self.ac_normalizer = RotationAwareNormalizer(
+                    flattened_gt_action, coupled_groups=ac_coupled
+                )
+            else:
+                self.ac_normalizer = Normalizer(flattened_gt_action)
             print(f"Action normalization stats: {self.ac_normalizer.stats}")
 
     def train(self, training=True):
@@ -228,13 +261,20 @@ class PEFMAgent(object):
     def _fix_state_dict_keys(self, state_dict):
         return {k: v for k, v in state_dict.items() if not "handle" in k}
 
+    @staticmethod
+    def _make_normalizer(saved_stats):
+        """Auto-detect normalizer type from checkpoint keys."""
+        if "center" in saved_stats:
+            return RotationAwareNormalizer(saved_stats)
+        return Normalizer(saved_stats)
+
     def load_snapshot(self, save_path):
         state_dict = torch.load(save_path, map_location=self.device)
-        self.state_normalizer = Normalizer(state_dict["state_normalizer"])
+        self.state_normalizer = self._make_normalizer(state_dict["state_normalizer"])
         self.actor.state_normalizer = self.state_normalizer
-        self.ac_normalizer = Normalizer(state_dict["ac_normalizer"])
+        self.ac_normalizer = self._make_normalizer(state_dict["ac_normalizer"])
         if self.obs_mode.startswith("pc"):
-            self.pc_normalizer = Normalizer(state_dict["pc_normalizer"])
+            self.pc_normalizer = self._make_normalizer(state_dict["pc_normalizer"])
             self.actor.pc_normalizer = self.pc_normalizer
         if hasattr(self, "encoder_handle"):
             del self.encoder_handle

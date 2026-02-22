@@ -39,6 +39,7 @@ data/
 *.npy
 data_rw/
 ping_pong_ball_free_fall/
+tests/
 
 
 # Checkpoints
