@@ -1,5 +1,5 @@
 prefix: default
-device: cuda
+device: cuda:1
 mode: train
 log_dir: logs/${mode}
 eval_data_path: null
