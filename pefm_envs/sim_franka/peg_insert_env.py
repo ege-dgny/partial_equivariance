@@ -85,6 +85,9 @@ class PegInsertEnv(FrankaEnv):
             "target": [0.35, -0.1, 0.05],
         }
 
+    # Minimum XY distance between peg spawn and socket center
+    PEG_SOCKET_MIN_SEP = 0.12
+
     def _create_task_objects(self):
         # Sample C4 rotation for peg
         demo_mode = getattr(self.args, "demo_mode", False)
@@ -92,6 +95,19 @@ class PegInsertEnv(FrankaEnv):
             self._peg_spawn_rotation = 0.0
         else:
             self._peg_spawn_rotation = self.rng.choice(self.C4_ROTATIONS)
+
+        # Rejection-sample spawn angle to avoid placing peg on the socket
+        socket_xy = self.SOCKET_POS[:2] + self.scene_offset
+        lo, hi = self.spawn_angle_range
+        for _ in range(50):
+            ang = self._object_rotation[-1]
+            peg_xy = self.scene_offset + self.PEG_SPAWN_RADIUS * np.array(
+                [np.cos(ang), np.sin(ang)]
+            )
+            if np.linalg.norm(peg_xy - socket_xy) >= self.PEG_SOCKET_MIN_SEP:
+                break
+            # Resample rotation
+            self._object_rotation[-1] = self.rng.rand() * (hi - lo) + lo
 
         self._peg_id = self._create_peg()
         self._socket_id = self._create_socket()

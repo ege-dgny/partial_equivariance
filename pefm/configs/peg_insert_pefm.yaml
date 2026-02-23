@@ -6,7 +6,7 @@ env:
   num_eef: 1
   args:
     num_eef: 1
-    demo_mode: true
+    demo_mode: false
     max_episode_length: 80
 
 model:

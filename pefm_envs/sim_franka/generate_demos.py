@@ -329,12 +329,12 @@ def run_demo(args, counter=0):
         px, py = peg_pos[0], peg_pos[1]
         peg_h = env.PEG_HEIGHT
         sx, sy = env.SOCKET_POS[0], env.SOCKET_POS[1]
-        insert_z = env.PLATE_THICKNESS + peg_h * 0.1
+        insert_z = env.PLATE_THICKNESS + peg_h * 2
 
         # Grasp the peg at its center. The peg geometry center is at peg_h/2
         # above the URDF origin (which is at table level + 0.001).
         # We use panda_grasptarget as EE, which has accurate IK.
-        grasp_z = peg_h * 0.5  # Peg center height
+        grasp_z = peg_h*2  # Higher grasp for panda_hand→fingertip offset
         safe_z = 0.30  # Safe height to avoid collisions during lateral moves
 
         # Use 7D waypoints so gripper yaw follows peg initialization during grasp.
@@ -355,6 +355,8 @@ def run_demo(args, counter=0):
             (1, sx, sy, safe_z, np.pi, 0.0, 0.0),
             # Phase 6 (world-frame): insert into socket
             (1, sx, sy, insert_z, np.pi, 0.0, 0.0),
+            (0, sx, sy, insert_z, np.pi, 0.0, 0.0),
+            (0, sx, sy, safe_z, np.pi, 0.0, 0.0),
         ]
         object_phases = {1, 2, 3, 4}  # Phases that are object-relative
         sketch = split_and_rotate_sketch_7d(

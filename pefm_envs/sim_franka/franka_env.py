@@ -355,12 +355,13 @@ class FrankaEnv:
         )
 
         steps_per_action = self.SIM_FREQ // self.freq
-        if self.demo_mode:
-            kp_val = 5.0
-            kd_val = 2.0
-        else:
-            kp_val = None  # use robot defaults
-            kd_val = None
+        # Use high PD gains in all modes.  The robot default kp=0.5 is
+        # inherited from the Kinova mobile-base system and far too low for
+        # the Franka — fingers close so slowly that the constraint-based
+        # grasp condition (get_fing_dist <= 0.02) takes ~14 action steps
+        # instead of ~2, causing grasps to fire very late or not at all.
+        kp_val = 5.0
+        kd_val = 2.0
 
         if target_qpos is not None:
             curr_qpos = self.robot.get_qpos()
