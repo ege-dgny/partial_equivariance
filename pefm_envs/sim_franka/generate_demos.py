@@ -334,7 +334,7 @@ def run_demo(args, counter=0):
         # Grasp the peg at its center. The peg geometry center is at peg_h/2
         # above the URDF origin (which is at table level + 0.001).
         # We use panda_grasptarget as EE, which has accurate IK.
-        grasp_z = peg_h*2  # Higher grasp for panda_hand→fingertip offset
+        grasp_z = peg_h*1.2  # Higher grasp for panda_hand→fingertip offset
         safe_z = 0.30  # Safe height to avoid collisions during lateral moves
 
         # Use 7D waypoints so gripper yaw follows peg initialization during grasp.
@@ -872,13 +872,13 @@ def get_args():
     parser.add_argument("--uniform_scaling", action="store_true")
     # Camera
     parser.add_argument("--cam_resolution", type=int, default=240)
-    parser.add_argument("--cam_rec_interval", type=int, default=5)
+    parser.add_argument("--cam_rec_interval", type=int, default=2)
     parser.add_argument("--vis", action="store_true")
     # Data
     parser.add_argument("--num_demos", type=int, default=1)
     parser.add_argument("--data_out_dir", type=str, default=None)
     parser.add_argument("--data_rew_threshold", type=float, default=0.5)
-    parser.add_argument("--speed_multiplier", type=float, default=1.0)
+    parser.add_argument("--speed_multiplier", type=float, default=0.5)
 
     args, _ = parser.parse_known_args()
 
