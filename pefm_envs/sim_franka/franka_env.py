@@ -82,6 +82,7 @@ class FrankaEnv:
         self.grasp_attach_max_dist = getattr(args, "grasp_attach_max_dist", 0.03)
         self.grasp_min_closed_dist = getattr(args, "grasp_min_closed_dist", 0.02)
         self.grasp_close_dwell_steps = getattr(args, "grasp_close_dwell_steps", 3)
+        self.grasp_snap_to_center = getattr(args, "grasp_snap_to_center", True)
 
         # Initialize simulation
         self._init_sim()
@@ -514,10 +515,32 @@ class FrankaEnv:
         if target_obj_id is not None:
             self._lock_object_in_place(target_obj_id)
 
+    def _snap_object_to_grasp(self, obj_id):
+        """Snap object to the finger midpoint and force upright orientation.
+
+        Compensates for the lack of contact-based centering in the simulator.
+        Real parallel-jaw grippers center objects via finger contact forces;
+        since robot-object collisions are disabled here, we replicate that
+        centering explicitly.
+        """
+        grasp_center = self._get_grasp_reference_pos()
+        obj_pos, obj_ori = self.sim.getBasePositionAndOrientation(obj_id)
+        obj_euler = list(pybullet.getEulerFromQuaternion(obj_ori))
+
+        # XY → finger midpoint, Z → keep original
+        snapped_pos = [grasp_center[0], grasp_center[1], obj_pos[2]]
+        # Zero roll/pitch, preserve yaw
+        snapped_ori = pybullet.getQuaternionFromEuler([0.0, 0.0, obj_euler[2]])
+
+        self.sim.resetBasePositionAndOrientation(obj_id, snapped_pos, snapped_ori)
+
     def _lock_object_in_place(self, obj_id):
-        """Lock object at its exact current pose relative to EE."""
+        """Lock object at its current pose relative to EE."""
         robot_id = self.robot.info.robot_id
         ee_link_id = self.robot.info.ee_link_id
+
+        if self.grasp_snap_to_center:
+            self._snap_object_to_grasp(obj_id)
 
         # Compute object pose relative to the EE's URDF link frame.
         # getLinkState[4:6] = world URDF link frame (matches createConstraint's
