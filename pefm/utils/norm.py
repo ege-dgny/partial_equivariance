@@ -91,7 +91,7 @@ class RotationAwareNormalizer(object):
         target_shape = (1,) * (nd - 1) + (data.shape[-1],)
         center = self.stats["center"].reshape(target_shape)
         scale = self.stats["scale"].reshape(target_shape)
-        return (data - center) / scale
+        return (data - center) / scale.clamp(min=1e-3)
 
     def unnormalize(self, data):
         nd = len(data.shape)

@@ -235,6 +235,7 @@ class PEFMAgent(object):
         # Backward
         self.optimizer.zero_grad()
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.actor.nets.parameters(), max_norm=1.0)
         self.optimizer.step()
         self.lr_scheduler.step()
 

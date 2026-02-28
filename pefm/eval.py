@@ -118,6 +118,10 @@ def run_eval(
                 elif agent_ac[0] < 0.1:
                     grip_state = 0.0
                 agent_ac[0] = grip_state
+                if np.isnan(agent_ac).any():
+                    print(f"Warning: NaN in action, skipping step. Check model weights.", flush=True)
+                    ac_dict = None
+                    break
                 state, rew, done, info = env.step(agent_ac, dummy_reward=True)
                 if hasattr(env, "visualize_eef_frame"):
                     env.visualize_eef_frame(state)
