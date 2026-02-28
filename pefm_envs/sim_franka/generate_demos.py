@@ -25,6 +25,34 @@ np.set_printoptions(precision=2, linewidth=150, threshold=10000, suppress=True)
 
 
 # ------------------------------------------------------------------ #
+#  Quaternion orientation utilities
+# ------------------------------------------------------------------ #
+
+def quat_error_axis_angle(q_current, q_target):
+    """Axis-angle rotation vector from q_current to q_target.
+
+    Quaternions in PyBullet [x, y, z, w] format.  Returns (3,) axis*angle
+    that, applied to q_current, yields q_target.  Singularity-free
+    (unlike Euler-angle differencing).
+    """
+    cx, cy, cz, cw = q_current
+    tx, ty, tz, tw = q_target
+    # q_error = q_target * conjugate(q_current)
+    ix, iy, iz, iw = -cx, -cy, -cz, cw
+    ew = tw * iw - tx * ix - ty * iy - tz * iz
+    ex = tw * ix + tx * iw + ty * iz - tz * iy
+    ey = tw * iy - tx * iz + ty * iw + tz * ix
+    ez = tw * iz + tx * iy - ty * ix + tz * iw
+    if ew < 0:
+        ex, ey, ez, ew = -ex, -ey, -ez, -ew
+    sin_half = np.sqrt(ex * ex + ey * ey + ez * ez)
+    if sin_half < 1e-8:
+        return np.zeros(3)
+    angle = 2.0 * np.arctan2(sin_half, ew)
+    return np.array([ex, ey, ez]) * (angle / sin_half)
+
+
+# ------------------------------------------------------------------ #
 #  Environment factory
 # ------------------------------------------------------------------ #
 
@@ -50,6 +78,9 @@ def get_env_class(task_name):
     elif task_name == "cup_upright":
         from .cup_upright_env import CupUprightEnv
         return CupUprightEnv
+    elif task_name == "cup_pour":
+        from .cup_pour_env import CupPourEnv
+        return CupPourEnv
     elif task_name == "book_insert":
         from .book_insert_env import BookInsertEnv
         return BookInsertEnv
@@ -507,38 +538,126 @@ def run_demo(args, counter=0):
             object_center=np.array([cx, cy]),
         )
 
+    elif args.task_name == "cup_pour":
+        # Cup pouring: grasp cup, carry to bowl edge, tilt to pour ball
+        cup_pos, _ = env.sim.getBasePositionAndOrientation(env._cup_id)
+        cx, cy = cup_pos[0], cup_pos[1]
+        cup_h = env.CUP_HEIGHT
+        cup_t = env.CUP_WALL_THICKNESS
+        bowl_x, bowl_y = env.BOWL_POS[0], env.BOWL_POS[1]
+        bowl_r = env.BOWL_RADIUS
+        bowl_h = env.BOWL_HEIGHT
+        safe_z = 0.25
+        tilt_angle = env.POUR_TILT_ANGLE
+
+        # Compute pour position and direction from cup-bowl geometry
+        dir_to_bowl = np.array([bowl_x - cx, bowl_y - cy])
+        dist_to_bowl = np.linalg.norm(dir_to_bowl)
+        if dist_to_bowl > 1e-6:
+            dir_norm = dir_to_bowl / dist_to_bowl
+        else:
+            dir_norm = np.array([1.0, 0.0])
+        pour_x = bowl_x - dir_norm[0] * (bowl_r + 0.02)
+        pour_y = bowl_y - dir_norm[1] * (bowl_r + 0.02)
+        tilt_yaw = np.arctan2(dir_norm[1], dir_norm[0])
+        pour_z = bowl_h + cup_h * 0.8
+
+        # 7-dim waypoints: (grip, x, y, z, roll, pitch, yaw)
+        sketch = [
+            # Phase 0 (object-relative): approach above cup
+            (0, 0.0, 0.0, safe_z, np.pi, 0.0, 0.0),
+            # Phase 1 (object-relative): descend to grasp height
+            (0, 0.0, 0.0, cup_h * 1.2, np.pi, 0.0, 0.0),
+            # Phase 2 (object-relative): grasp
+            (1, 0.0, 0.0, cup_h * 0.5, np.pi, 0.0, 0.0),
+            # Phase 3 (object-relative): lift
+            (1, 0.0, 0.0, safe_z, np.pi, 0.0, 0.0),
+            # Phase 4 (world-frame): move to pour position, face bowl
+            (1, pour_x, pour_y, pour_z, np.pi, 0.0, tilt_yaw),
+            # Phase 5 (world-frame): tilt to pour
+            (1, pour_x, pour_y, pour_z, np.pi, -tilt_angle, tilt_yaw),
+            # Phases 6-8 (world-frame): hold tilt (let ball fall)
+            (1, pour_x, pour_y, pour_z, np.pi, -tilt_angle, tilt_yaw),
+            (1, pour_x, pour_y, pour_z, np.pi, -tilt_angle, tilt_yaw),
+            (1, pour_x, pour_y, pour_z, np.pi, -tilt_angle, tilt_yaw),
+            # Phase 9 (world-frame): upright, release, retreat
+            (0, pour_x, pour_y, safe_z, np.pi, 0.0, 0.0),
+        ]
+        object_phases = {0, 1, 2, 3}
+        sketch = split_and_rotate_sketch_7d(
+            sketch, object_phases, ang,
+            object_center=np.array([cx, cy]),
+        )
+
     elif args.task_name == "book_insert":
         book_pos, _ = env.sim.getBasePositionAndOrientation(env._book_id)
         bx, by = book_pos[0], book_pos[1]
-        bt = env.BOOK_THICKNESS
-        bl = env.BOOK_LENGTH
-        # Target shelf position
+        bl = env.BOOK_LENGTH   # 0.15 — height when standing
+        bw = env.BOOK_WIDTH    # 0.10
+        # Target shelf position (book center target)
         sx, sy, sz = env._target_pos[0], env._target_pos[1], env._target_pos[2]
-        safe_z = 0.25
+        safe_z = 0.30
+        # Shelf opening faces -Y; front edge Y coordinate
+        shelf_front_y = env.CASE_POS[1] - env.CASE_DEPTH / 2
+
+        # Spine is at local Y = -WIDTH/2 from book center.
+        spine_y = -bw / 2  # object-relative Y offset to spine
+        approach_offset = 0.08  # horizontal standoff from spine
+
+        # Side-grip orientation: approach from -Y toward spine (+Y),
+        # fingers close along X (clamping flat faces), gripper body vertical.
+        side_roll = -np.pi / 2
+        side_pitch = -np.pi / 2
+        grasp_z = bl / 2  # mid-height of standing book
+
+        # panda_hand sits ~3cm behind the finger tips along EEF Z.
+        # Position panda_hand behind the spine so fingers land at the spine.
+        hand_offset = 0.03
+        grasp_y = spine_y - hand_offset
+
+        # After the constraint is created, the book center is
+        # (bw/2 + hand_offset) ahead of panda_hand along +Y (at yaw=0).
+        eef_y_off = -(bw / 2 + hand_offset)
 
         # 7-dim waypoints: (grip, x, y, z, roll, pitch, yaw)
-        # EEF default: gripper pointing down = roll=pi, pitch=0, yaw=0
         sketch = [
-            # Phase 0 (object-relative): approach above book
-            (0, 0.0, 0.0, safe_z, np.pi, 0.0, 0.0),
-            # Phase 1 (object-relative): descend to book
-            (0, 0.0, 0.0, bt * 3.0, np.pi, 0.0, 0.0),
-            # Phase 2 (object-relative): grasp book (top-down pinch)
-            (1, 0.0, 0.0, bt * 1.5, np.pi, 0.0, 0.0),
-            # Phase 3 (object-relative): lift with book
-            (1, 0.0, 0.0, safe_z, np.pi, 0.0, 0.0),
-            # Phase 4 (world-frame): move toward shelf, reorient book to vertical
-            # Tilt EEF 90deg (pitch = pi/2) to hold book vertically
-            (1, sx, sy + 0.10, safe_z, np.pi, np.pi / 2, 0.0),
-            # Phase 5 (world-frame): approach shelf slot
-            (1, sx, sy + 0.05, sz, np.pi, np.pi / 2, 0.0),
-            # Phase 6 (world-frame): insert into shelf
-            (1, sx, sy, sz, np.pi, np.pi / 2, 0.0),
-            # Phase 7 (world-frame): release
-            (0, sx, sy, sz, np.pi, np.pi / 2, 0.0),
+            # Phase 0 (object-relative): safe height, offset from spine
+            (0, 0.0, grasp_y - approach_offset, safe_z,
+             side_roll, side_pitch, 0.0),
+            # Phase 1 (object-relative): lower to grasp height, still offset
+            (0, 0.0, grasp_y - approach_offset, grasp_z,
+             side_roll, side_pitch, 0.0),
+            # Phase 2 (object-relative): approach toward spine (grip closes
+            #   at the last step of this phase, starting the dwell counter)
+            (1, 0.0, grasp_y, grasp_z,
+             side_roll, side_pitch, 0.0),
+            # Phases 3-5: dwell at grasp position with grip=1 so the
+            # constraint fires before any lifting begins. Each zero-distance
+            # phase yields 1 step; prev_grip=1 so grip=1 for all sub-steps.
+            (1, 0.0, grasp_y, grasp_z,
+             side_roll, side_pitch, 0.0),
+            (1, 0.0, grasp_y, grasp_z,
+             side_roll, side_pitch, 0.0),
+            (1, 0.0, grasp_y, grasp_z,
+             side_roll, side_pitch, 0.0),
+            # Phase 6 (object-relative): lift with book
+            (1, 0.0, grasp_y, safe_z,
+             side_roll, side_pitch, 0.0),
+            # Phase 7 (world-frame): move toward shelf (yaw resets to 0)
+            (1, sx, shelf_front_y - 0.08 + eef_y_off, safe_z,
+             side_roll, side_pitch, 0.0),
+            # Phase 8 (world-frame): lower to slot height
+            (1, sx, shelf_front_y - 0.05 + eef_y_off, sz,
+             side_roll, side_pitch, 0.0),
+            # Phase 9 (world-frame): slide into shelf along +Y
+            (1, sx, sy + eef_y_off, sz,
+             side_roll, side_pitch, 0.0),
+            # Phase 10 (world-frame): release
+            (0, sx, sy + eef_y_off, sz,
+             side_roll, side_pitch, 0.0),
         ]
-        # Phases 0-3 are object-relative, 4-7 are world-frame
-        object_phases = {0, 1, 2, 3}
+        # Phases 0-6 are object-relative, 7-10 are world-frame
+        object_phases = {0, 1, 2, 3, 4, 5, 6}
         sketch = split_and_rotate_sketch_7d(
             sketch, object_phases, ang,
             object_center=np.array([bx, by]),
@@ -694,14 +813,13 @@ def run_demo(args, counter=0):
                 eef_vel = np.clip(eef_vel, -1.0, 1.0)
 
                 if use_orientation and len(action_raw) >= 7:
-                    # Get current EEF orientation and compute orientation velocity
                     ee_pos, ee_quat, _, _ = env.robot.get_ee_pos_quat_vel()
-                    curr_eef_euler = np.array(pybullet.getEulerFromQuaternion(ee_quat))
                     target_euler = action_raw[4:7]
-                    # Compute orientation velocity (wrap differences)
-                    euler_diff = target_euler - curr_eef_euler
-                    euler_diff = np.mod(euler_diff + np.pi, 2 * np.pi) - np.pi
-                    ori_vel = euler_diff * env.freq
+                    target_quat = pybullet.getQuaternionFromEuler(
+                        target_euler.tolist()
+                    )
+                    axis_angle_err = quat_error_axis_angle(ee_quat, target_quat)
+                    ori_vel = axis_angle_err * env.freq
                     ori_vel = np.clip(ori_vel, -1.0, 1.0)
                     action = np.array([grip_ac, *eef_vel, *ori_vel])
                 else:
@@ -795,6 +913,11 @@ def run_demo(args, counter=0):
         uprightness = np.dot(cup_z_axis, [0, 0, 1])
         tilt_deg = np.degrees(np.arccos(np.clip(uprightness, -1, 1)))
         print(f"Reward: {final_rew:.3f} | cup: [{cup_pos[0]:.3f}, {cup_pos[1]:.3f}, {cup_pos[2]:.3f}] | tilt: {tilt_deg:.1f}deg | target: [{env.TARGET_POS[0]:.2f}, {env.TARGET_POS[1]:.2f}]")
+    elif task == "cup_pour":
+        cup_pos, _ = env.sim.getBasePositionAndOrientation(env._cup_id)
+        ball_pos, _ = env.sim.getBasePositionAndOrientation(env._ball_id)
+        ball_xy = np.linalg.norm(np.array(ball_pos[:2]) - env.BOWL_POS[:2])
+        print(f"Reward: {final_rew:.3f} | cup: [{cup_pos[0]:.3f}, {cup_pos[1]:.3f}, {cup_pos[2]:.3f}] | ball: [{ball_pos[0]:.3f}, {ball_pos[1]:.3f}, {ball_pos[2]:.3f}] | ball-bowl: {ball_xy:.3f}")
     elif task == "book_insert":
         book_pos, book_quat = env.sim.getBasePositionAndOrientation(env._book_id)
         rot_mat = np.array(env.sim.getMatrixFromQuaternion(book_quat)).reshape(3, 3)
@@ -854,7 +977,8 @@ def get_args():
     parser.add_argument(
         "--task_name", type=str, default="pick_place",
         choices=["pick_place", "peg_insert", "centering", "orient_place", "stack",
-                 "position_insert", "cup_upright", "book_insert", "push_t"],
+                 "position_insert", "cup_upright", "cup_pour", "book_insert",
+                 "push_t"],
     )
     # Seeds
     parser.add_argument("--seed", type=int, default=0)

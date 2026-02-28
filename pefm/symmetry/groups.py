@@ -117,6 +117,8 @@ class SO2(LieGroup):
           [6:9] orientation dir2 -> rotate xy
           [9:12] gravity direction -> rotate xy
           [12] gripper -> unchanged
+
+        For even eef_dim != 13 (2D tasks): all dims are consecutive xy pairs.
         """
         orig_shape = state.shape
         # Reshape to (B, ..., num_eef, eef_dim)
@@ -130,13 +132,17 @@ class SO2(LieGroup):
             sin_t = sin_t.unsqueeze(-1)
 
         result = state.clone()
-        # Rotate position xy
-        result[..., :2] = _rotate_xy(cos_t, sin_t, state[..., :2])
-        # Rotate orientation directions xy
-        result[..., 3:5] = _rotate_xy(cos_t, sin_t, state[..., 3:5])
-        result[..., 6:8] = _rotate_xy(cos_t, sin_t, state[..., 6:8])
-        # Rotate gravity direction xy
-        result[..., 9:11] = _rotate_xy(cos_t, sin_t, state[..., 9:11])
+
+        if eef_dim % 2 == 0 and eef_dim != 13:
+            # 2D task: all dims are consecutive xy pairs
+            for i in range(eef_dim // 2):
+                result[..., 2*i:2*i+2] = _rotate_xy(cos_t, sin_t, state[..., 2*i:2*i+2])
+        else:
+            # 3D task: eef_dim=13 layout
+            result[..., :2] = _rotate_xy(cos_t, sin_t, state[..., :2])
+            result[..., 3:5] = _rotate_xy(cos_t, sin_t, state[..., 3:5])
+            result[..., 6:8] = _rotate_xy(cos_t, sin_t, state[..., 6:8])
+            result[..., 9:11] = _rotate_xy(cos_t, sin_t, state[..., 9:11])
 
         return result.view(orig_shape)
 
@@ -147,6 +153,7 @@ class SO2(LieGroup):
         action: (B, pred_horizon, num_eef * dof)
 
         Per EEF, dof=7 layout: [gripper, dx, dy, dz, drx, dry, drz]
+        For dof=2: [x, y] — rotate both.
         """
         orig_shape = action.shape
         B = action.shape[0]
@@ -160,10 +167,15 @@ class SO2(LieGroup):
             sin_t = sin_t.unsqueeze(-1)
 
         result = action.clone()
-        # Rotate dx, dy (indices 1, 2)
-        result[..., 1:3] = _rotate_xy(cos_t, sin_t, action[..., 1:3])
-        # Rotate drx, dry (indices 4, 5)
-        result[..., 4:6] = _rotate_xy(cos_t, sin_t, action[..., 4:6])
+
+        if dof == 2:
+            # 2D action: [x, y]
+            result[..., :2] = _rotate_xy(cos_t, sin_t, action[..., :2])
+        else:
+            # 3D action: [gripper, dx, dy, dz, drx, dry, drz]
+            result[..., 1:3] = _rotate_xy(cos_t, sin_t, action[..., 1:3])
+            if dof >= 7:
+                result[..., 4:6] = _rotate_xy(cos_t, sin_t, action[..., 4:6])
 
         return result.view(orig_shape)
 

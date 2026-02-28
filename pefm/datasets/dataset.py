@@ -247,7 +247,13 @@ class BaseDataset(Dataset):
                     xyz += offset[None]
                 if "eef_pos" in keys:
                     eef_pos_shape = eef_pos.shape
-                    if self.dof < 7:
+                    if self.eef_dim % 2 == 0 and self.eef_dim != 13:
+                        # 2D task: all dims are xy pairs. Pad to 3D, rotate, take [:2].
+                        flat = eef_pos.reshape(-1, 2)
+                        padded = np.concatenate([flat, np.zeros((flat.shape[0], 1))], axis=1)
+                        padded = rotate_around_z(padded, rot, center, scale) + offset[None]
+                        eef_pos = padded[:, :2].reshape(eef_pos_shape).astype(np.float32)
+                    elif self.dof < 7:
                         eef_pos = eef_pos.reshape(-1, 3)
                         eef_pos = rotate_around_z(eef_pos, rot, center, scale)
                         eef_pos += offset[None]
@@ -266,7 +272,12 @@ class BaseDataset(Dataset):
                                 + offset[None]
                             )
                 if "action" in keys:
-                    if self.dof == 3:
+                    if self.dof == 2:
+                        action = action.reshape(-1, 2)
+                        padded = np.concatenate([action, np.zeros((action.shape[0], 1))], axis=1)
+                        padded = rotate_around_z(padded, rot, center, scale)
+                        action = padded[:, :2]
+                    elif self.dof == 3:
                         action = action.reshape(-1, 3)
                         action = rotate_around_z(action, rot, center, scale)
                     elif self.dof == 4:

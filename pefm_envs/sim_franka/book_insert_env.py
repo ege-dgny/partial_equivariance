@@ -1,9 +1,9 @@
 """
 Book-Shelf Insertion environment: SO(2) symmetry conflict.
 
-A book (flat box) spawns on the table at a random orientation.
-The robot must grasp it, reorient it to vertical, and insert it
-into a fixed-position bookcase shelf. The grasp phase has SO(2)
+A book (flat box) spawns vertically on the table at a random yaw.
+The robot must grasp it, carry it to a fixed-position bookcase, and
+insert it into the upper shelf slot.  The grasp phase has SO(2)
 symmetry; the shelf placement breaks it (fixed world-frame position
 and orientation).
 """
@@ -16,25 +16,25 @@ from .franka_env import FrankaEnv
 
 class BookInsertEnv(FrankaEnv):
 
-    # Book dimensions (laid flat on table)
-    BOOK_LENGTH = 0.15     # 15cm (height when vertical)
+    # Book dimensions (local frame: X=length, Y=width, Z=thickness)
+    BOOK_LENGTH = 0.15     # 15cm — becomes height when standing
     BOOK_WIDTH = 0.10      # 10cm
-    BOOK_THICKNESS = 0.02  # 2cm
+    BOOK_THICKNESS = 0.04  # 4cm
 
     # Bookcase dimensions
-    CASE_WIDTH = 0.25       # 25cm wide
-    CASE_DEPTH = 0.18       # 18cm deep
-    CASE_HEIGHT = 0.30      # 30cm tall
+    CASE_WIDTH = 0.15       # 15cm wide (Y direction); inner ≈ 13cm fits 10cm book
+    CASE_DEPTH = 0.18       # 18cm deep (X direction, insertion axis)
+    CASE_HEIGHT = 0.40      # 40cm tall
     SHELF_THICKNESS = 0.01  # 1cm thick shelves
     SIDE_THICKNESS = 0.01   # 1cm thick sides
     BACK_THICKNESS = 0.005  # 5mm back panel
-    NUM_SHELVES = 3         # Bottom, middle, top
+    NUM_SHELVES = 2         # 2 slots (bottom + top)
 
-    # Fixed bookcase position (within Franka reach)
-    CASE_POS = np.array([0.45, -0.20, 0.0])
+    # Fixed bookcase position — to the left of robot (+Y), opening faces -Y
+    CASE_POS = np.array([0.45, 0.45, 0.0])
 
-    # Target: middle shelf slot
-    TARGET_SHELF_IDX = 1  # 0-indexed (bottom=0, middle=1, top=2)
+    # Target: upper shelf slot
+    TARGET_SHELF_IDX = 1  # 0=lower, 1=upper
 
     # Book spawn
     SPAWN_RADIUS = 0.45
@@ -51,26 +51,33 @@ class BookInsertEnv(FrankaEnv):
     @property
     def default_front_camera(self):
         return {
-            "pitch": -45,
-            "yaw": 15,
+            "pitch": -40,
+            "yaw": -15,
             "roll": 0,
             "distance": 1.3,
             "fov": 45,
-            "target": [0.35, -0.05, 0.1],
+            "target": [0.40, 0.20, 0.15],
         }
 
     @property
     def default_side_camera(self):
         return {
-            "pitch": -30,
-            "yaw": 90,
+            "pitch": -25,
+            "yaw": -70,
             "roll": 0,
-            "distance": 1.3,
+            "distance": 1.2,
             "fov": 45,
-            "target": [0.35, -0.05, 0.1],
+            "target": [0.40, 0.25, 0.15],
         }
 
     def _create_task_objects(self):
+        # Disable snap-to-center: spine-edge grasp needs the offset preserved
+        self.grasp_snap_to_center = False
+        # Side-grip places fingers inside the book body (collisions disabled),
+        # so the closest mesh *surface* vertex is ~4cm away.  Default 3cm
+        # threshold would delay constraint creation until the lift phase.
+        self.grasp_attach_max_dist = 0.06
+
         self._book_id = self._create_book()
         self._case_ids = self._create_bookcase()
 
@@ -102,8 +109,11 @@ class BookInsertEnv(FrankaEnv):
             self.sim.stepSimulation()
 
     def _create_book(self):
-        """Create flat book on table with random Z-rotation."""
-        # Book lies flat: half-extents are (length/2, width/2, thickness/2)
+        """Create book standing vertically with random Z-rotation.
+
+        Compound body: base = blue book box, link 0 = dark-red spine
+        visual overlay at local Y = -WIDTH/2 (the bound edge).
+        """
         half = [self.BOOK_LENGTH / 2, self.BOOK_WIDTH / 2, self.BOOK_THICKNESS / 2]
 
         col = self.sim.createCollisionShape(pybullet.GEOM_BOX, halfExtents=half)
@@ -112,12 +122,21 @@ class BookInsertEnv(FrankaEnv):
             rgbaColor=[0.2, 0.3, 0.7, 1.0],  # Dark blue book
         )
 
+        # Spine visual: thin colored strip on the bound edge
+        spine_half = [self.BOOK_LENGTH / 2, 0.003,
+                      self.BOOK_THICKNESS / 2 + 0.001]
+        vis_spine = self.sim.createVisualShape(
+            pybullet.GEOM_BOX, halfExtents=spine_half,
+            rgbaColor=[0.6, 0.1, 0.1, 1.0],  # Dark red spine
+        )
+
         # Spawn on arc
         ang = self._object_rotation[-1]
         spawn_x = self.SPAWN_RADIUS * np.cos(ang)
         spawn_y = self.SPAWN_RADIUS * np.sin(ang)
-        pos = [spawn_x, spawn_y, self.BOOK_THICKNESS / 2 + 0.001]
-        quat = pybullet.getQuaternionFromEuler([0, 0, ang])
+        # Standing: pitch=π/2 rotates local X (length) to world Z
+        pos = [spawn_x, spawn_y, self.BOOK_LENGTH / 2]
+        quat = pybullet.getQuaternionFromEuler([0, np.pi / 2, ang])
 
         book_id = self.sim.createMultiBody(
             baseMass=0.3,
@@ -125,31 +144,45 @@ class BookInsertEnv(FrankaEnv):
             baseVisualShapeIndex=vis,
             basePosition=pos,
             baseOrientation=quat,
+            # Spine visual as fixed child link (no collision)
+            linkMasses=[0.001],
+            linkCollisionShapeIndices=[-1],
+            linkVisualShapeIndices=[vis_spine],
+            linkPositions=[[0, -self.BOOK_WIDTH / 2, 0]],
+            linkOrientations=[[0, 0, 0, 1]],
+            linkInertialFramePositions=[[0, 0, 0]],
+            linkInertialFrameOrientations=[[0, 0, 0, 1]],
+            linkParentIndices=[0],
+            linkJointTypes=[pybullet.JOINT_FIXED],
+            linkJointAxis=[[0, 0, 0]],
         )
-        self.sim.changeDynamics(book_id, -1, lateralFriction=0.8)
+        self.sim.changeDynamics(book_id, -1, lateralFriction=1.5)
         return book_id
 
     def _create_bookcase(self):
-        """Create a simple bookcase with shelves at fixed world position.
+        """Create bookcase with opening facing -Y (toward robot).
 
-        Structure: 2 sides + (NUM_SHELVES+1) shelves + back panel.
-        Opening faces the robot (negative Y direction from case center).
+        Structure: 2 side panels (along X) + back panel (+Y side)
+                 + (NUM_SHELVES+1) shelves.
+        Robot inserts the book along +Y into the opening.
         """
         ids = []
         cx, cy = self.CASE_POS[0], self.CASE_POS[1]
-        w = self.CASE_WIDTH
-        d = self.CASE_DEPTH
+        w = self.CASE_WIDTH    # X span (visible width)
+        d = self.CASE_DEPTH    # Y span (depth, insertion axis)
         h = self.CASE_HEIGHT
         st = self.SIDE_THICKNESS
         sht = self.SHELF_THICKNESS
         bt = self.BACK_THICKNESS
 
-        # Left side panel
+        inner_w = w - 2 * st  # internal X span
+
+        # Left side panel (negative X)
         side_half = [st / 2, d / 2, h / 2]
         col = self.sim.createCollisionShape(pybullet.GEOM_BOX, halfExtents=side_half)
         vis = self.sim.createVisualShape(
             pybullet.GEOM_BOX, halfExtents=side_half,
-            rgbaColor=[0.55, 0.35, 0.2, 1.0],  # Wood brown
+            rgbaColor=[0.55, 0.35, 0.2, 1.0],
         )
         left_x = cx - w / 2 + st / 2
         left_id = self.sim.createMultiBody(
@@ -160,7 +193,7 @@ class BookInsertEnv(FrankaEnv):
         )
         ids.append(left_id)
 
-        # Right side panel
+        # Right side panel (positive X)
         right_x = cx + w / 2 - st / 2
         col2 = self.sim.createCollisionShape(pybullet.GEOM_BOX, halfExtents=side_half)
         vis2 = self.sim.createVisualShape(
@@ -175,8 +208,7 @@ class BookInsertEnv(FrankaEnv):
         )
         ids.append(right_id)
 
-        # Back panel
-        inner_w = w - 2 * st
+        # Back panel (+Y side, farthest from robot)
         back_half = [inner_w / 2, bt / 2, h / 2]
         col_b = self.sim.createCollisionShape(pybullet.GEOM_BOX, halfExtents=back_half)
         vis_b = self.sim.createVisualShape(
@@ -222,25 +254,24 @@ class BookInsertEnv(FrankaEnv):
         book_pos, book_quat = self.sim.getBasePositionAndOrientation(self._book_id)
         book_pos = np.array(book_pos)
 
-        # XY distance to shelf center
-        target_xy = self._target_pos[:2]
-        xy_dist = np.linalg.norm(book_pos[:2] - target_xy)
+        # Distance components
+        dx = abs(book_pos[0] - self._target_pos[0])
+        dy = abs(book_pos[1] - self._target_pos[1])
+        z_err = abs(book_pos[2] - self._target_pos[2])
+        xy_dist = np.sqrt(dx**2 + dy**2)
 
-        # Z height at shelf level
-        target_z = self._target_pos[2]
-        z_err = abs(book_pos[2] - target_z)
-
-        # Book orientation: should be vertical (book's local Z axis ≈ world Y or X)
-        # When the book is flat, its local Z axis points up (world Z).
-        # When inserted vertically, the local Z should be horizontal.
+        # Book orientation: local Z (thickness axis) should be horizontal
         rot_mat = np.array(self.sim.getMatrixFromQuaternion(book_quat)).reshape(3, 3)
-        book_z_axis = rot_mat[:, 2]  # Local Z in world frame
-        # Vertical means book_z_axis dot world_z ≈ 0
+        book_z_axis = rot_mat[:, 2]
         verticality = abs(np.dot(book_z_axis, [0, 0, 1]))
-        is_vertical = verticality < 0.2  # Nearly horizontal local Z
+        is_vertical = verticality < 0.2
 
         released = self.constraint_id is None
-        in_slot = xy_dist < 0.05 and z_err < self._shelf_slot_height / 2
+        in_slot = (
+            dx < (self.CASE_WIDTH - 2 * self.SIDE_THICKNESS) / 2
+            and dy < self.CASE_DEPTH / 2
+            and z_err < self._shelf_slot_height / 2
+        )
 
         if in_slot and is_vertical and released:
             return 1.0
@@ -250,7 +281,7 @@ class BookInsertEnv(FrankaEnv):
         reward += 0.3 * max(0, 1.0 - xy_dist / 0.3)
         # Z height (0-0.2)
         reward += 0.2 * max(0, 1.0 - z_err / 0.2)
-        # Verticality (0-0.2): lower verticality = more vertical book
+        # Verticality (0-0.2)
         reward += 0.2 * max(0, 1.0 - verticality)
         # Release bonus (0.3): only if in slot
         if in_slot and released:

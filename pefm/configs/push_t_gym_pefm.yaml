@@ -1,0 +1,29 @@
+defaults:
+  - base_pefm
+
+env:
+  env_class: push_t_gym
+  num_eef: 1
+  dof: 2
+  eef_dim: 18
+  args:
+    num_eef: 1
+    dof: 2
+    max_episode_length: 300
+    obs_mode: state
+    ac_mode: abs
+
+model:
+  obs_mode: state
+  ac_mode: abs
+  symmetry:
+    group_type: so2
+    distribution_type: projected_normal
+    num_samples: 8
+    entropy_weight: 0.01
+
+data:
+  dataset:
+    num_points: 1
+    min_demo_length: 10
+    shuffle_pc: false

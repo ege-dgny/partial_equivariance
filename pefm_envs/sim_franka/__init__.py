@@ -8,6 +8,8 @@ from .orient_place_env import OrientPlaceEnv
 from .stack_env import StackEnv
 from .position_insert_env import PositionInsertEnv
 from .cup_upright_env import CupUprightEnv
+from .cup_pour_env import CupPourEnv
+from .book_insert_env import BookInsertEnv
 
 __all__ = [
     "FrankaEnv",
@@ -18,4 +20,6 @@ __all__ = [
     "StackEnv",
     "PositionInsertEnv",
     "CupUprightEnv",
+    "CupPourEnv",
+    "BookInsertEnv",
 ]

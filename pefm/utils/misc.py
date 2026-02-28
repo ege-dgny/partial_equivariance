@@ -60,9 +60,15 @@ def get_env_class(env_name):
     elif env_name == "book_insert":
         from pefm_envs.sim_franka.book_insert_env import BookInsertEnv
         return BookInsertEnv
+    elif env_name == "cup_pour":
+        from pefm_envs.sim_franka.cup_pour_env import CupPourEnv
+        return CupPourEnv
     elif env_name == "push_t":
         from pefm_envs.sim_franka.push_t_env import PushTEnv
         return PushTEnv
+    elif env_name == "push_t_gym":
+        from pefm_envs.gym_pusht.pusht_wrapper import GymPushTEnv
+        return GymPushTEnv
     else:
         raise ValueError(f"Environment [{env_name}] not found.")
 

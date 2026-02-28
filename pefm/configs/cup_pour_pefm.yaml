@@ -1,0 +1,16 @@
+defaults:
+  - base_pefm
+
+env:
+  env_class: cup_pour
+  num_eef: 1
+  args:
+    num_eef: 1
+    max_episode_length: 80
+
+model:
+  symmetry:
+    group_type: so2
+    distribution_type: projected_normal
+    num_samples: 8
+    entropy_weight: 0.01
