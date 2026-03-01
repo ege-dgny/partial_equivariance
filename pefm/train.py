@@ -21,6 +21,11 @@ from pefm_envs.subproc_vec_env import SubprocVecEnv
 def main(cfg):
     assert cfg.mode == "train"
     np.random.seed(cfg.seed)
+    torch.manual_seed(cfg.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(cfg.seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
     batch_size = cfg.training.batch_size
 
@@ -42,6 +47,8 @@ def main(cfg):
 
     train_dataset = get_dataset(cfg, "train")
     num_workers = cfg.data.dataset.num_workers
+    loader_generator = torch.Generator()
+    loader_generator.manual_seed(cfg.seed)
     train_loader = torch.utils.data.DataLoader(
         train_dataset,
         batch_size=batch_size,
@@ -49,6 +56,7 @@ def main(cfg):
         shuffle=True,
         drop_last=True,
         pin_memory=True,
+        generator=loader_generator,
     )
     cfg.data.dataset.num_training_steps = (
         cfg.training.num_epochs * len(train_dataset) // batch_size

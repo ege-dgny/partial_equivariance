@@ -982,8 +982,8 @@ def get_args():
     )
     # Seeds
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--seed_env", type=int, default=666)
-    parser.add_argument("--seed_cam", type=int, default=66666)
+    parser.add_argument("--seed_env", type=int, default=0)
+    parser.add_argument("--seed_cam", type=int, default=0)
     # Simulation
     parser.add_argument("--dof", type=int, default=7)
     parser.add_argument("--num_eef", type=int, default=1)
