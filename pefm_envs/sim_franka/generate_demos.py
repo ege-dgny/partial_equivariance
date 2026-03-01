@@ -539,51 +539,72 @@ def run_demo(args, counter=0):
         )
 
     elif args.task_name == "cup_pour":
-        # Cup pouring: grasp cup, carry to bowl edge, tilt to pour ball
+        # Cup pouring: side-grasp cup, carry to bowl edge, tilt to pour ball
         cup_pos, _ = env.sim.getBasePositionAndOrientation(env._cup_id)
         cx, cy = cup_pos[0], cup_pos[1]
         cup_h = env.CUP_HEIGHT
-        cup_t = env.CUP_WALL_THICKNESS
         bowl_x, bowl_y = env.BOWL_POS[0], env.BOWL_POS[1]
         bowl_r = env.BOWL_RADIUS
         bowl_h = env.BOWL_HEIGHT
         safe_z = 0.25
         tilt_angle = env.POUR_TILT_ANGLE
 
-        # Compute pour position and direction from cup-bowl geometry
-        dir_to_bowl = np.array([bowl_x - cx, bowl_y - cy])
-        dist_to_bowl = np.linalg.norm(dir_to_bowl)
-        if dist_to_bowl > 1e-6:
-            dir_norm = dir_to_bowl / dist_to_bowl
-        else:
-            dir_norm = np.array([1.0, 0.0])
-        pour_x = bowl_x - dir_norm[0] * (bowl_r + 0.02)
-        pour_y = bowl_y - dir_norm[1] * (bowl_r + 0.02)
-        tilt_yaw = np.arctan2(dir_norm[1], dir_norm[0])
-        pour_z = bowl_h + cup_h * 0.8
+        # Side-grasp orientation: same as book_insert [-pi/2, -pi/2, 0].
+        # EEF Z = [0,1,0] (approach from -Y toward +Y),
+        # EEF Y = [1,0,0] (fingers close along X, horizontal),
+        # EEF X = [0,0,1] (gripper body vertical, cup "up" axis).
+        side_roll = -np.pi / 2
+        side_pitch = -np.pi / 2
+        approach_offset = 0.08
+        grasp_z = cup_h * 0.5
+
+        # Fixed pour position for debugging.
+        # Bowl is at BOWL_POS = [0.4, 0.0, 0.0].
+        # tilt_yaw=0 → local Z = [0,1,0], so finger midpoint (cup center)
+        # is ~5.8cm in +Y from panda_hand.  Shift pour_y by -0.05 to
+        # center the cup on the bowl.
+        pour_x = bowl_x - bowl_r - 0.04
+        pour_y = bowl_y - 0.05
+        pour_z = bowl_h + cup_h
+        tilt_yaw = 0.0
 
         # 7-dim waypoints: (grip, x, y, z, roll, pitch, yaw)
         sketch = [
-            # Phase 0 (object-relative): approach above cup
-            (0, 0.0, 0.0, safe_z, np.pi, 0.0, 0.0),
-            # Phase 1 (object-relative): descend to grasp height
-            (0, 0.0, 0.0, cup_h * 1.2, np.pi, 0.0, 0.0),
-            # Phase 2 (object-relative): grasp
-            (1, 0.0, 0.0, cup_h * 0.5, np.pi, 0.0, 0.0),
-            # Phase 3 (object-relative): lift
-            (1, 0.0, 0.0, safe_z, np.pi, 0.0, 0.0),
-            # Phase 4 (world-frame): move to pour position, face bowl
-            (1, pour_x, pour_y, pour_z, np.pi, 0.0, tilt_yaw),
-            # Phase 5 (world-frame): tilt to pour
-            (1, pour_x, pour_y, pour_z, np.pi, -tilt_angle, tilt_yaw),
-            # Phases 6-8 (world-frame): hold tilt (let ball fall)
-            (1, pour_x, pour_y, pour_z, np.pi, -tilt_angle, tilt_yaw),
-            (1, pour_x, pour_y, pour_z, np.pi, -tilt_angle, tilt_yaw),
-            (1, pour_x, pour_y, pour_z, np.pi, -tilt_angle, tilt_yaw),
-            # Phase 9 (world-frame): upright, release, retreat
-            (0, pour_x, pour_y, safe_z, np.pi, 0.0, 0.0),
+            # Phase 0 (object-relative): safe height, offset from cup (-Y)
+            (0, 0.0, -approach_offset, safe_z,
+             side_roll, side_pitch, 0.0),
+            # Phase 1 (object-relative): lower to grasp height, still offset
+            (0, 0.0, -approach_offset, grasp_z,
+             side_roll, side_pitch, 0.0),
+            # Phase 2 (object-relative): slide to cup center, grip closes
+            (1, 0.0, 0.0, grasp_z,
+             side_roll, side_pitch, 0.0),
+            # Phases 3-5: dwell for grasp constraint to fire
+            (1, 0.0, 0.0, grasp_z,
+             side_roll, side_pitch, 0.0),
+            (1, 0.0, 0.0, grasp_z,
+             side_roll, side_pitch, 0.0),
+            (1, 0.0, 0.0, grasp_z,
+             side_roll, side_pitch, 0.0),
+            # Phase 6 (object-relative): lift
+            (1, 0.0, 0.0, safe_z,
+             side_roll, side_pitch, 0.0),
+            # Phase 7 (world-frame): move to pour position (upright)
+            (1, pour_x, pour_y, pour_z,
+             side_roll, side_pitch, tilt_yaw),
+            # Phase 8 (world-frame): tilt to pour
+            (1, pour_x, pour_y, pour_z,
+             side_roll, side_pitch + tilt_angle, tilt_yaw),
+            # Phases 9-10: hold tilt (ball falls out)
+            (1, pour_x, pour_y, pour_z,
+             side_roll, side_pitch + tilt_angle, tilt_yaw),
+            (1, pour_x, pour_y, pour_z,
+             side_roll, side_pitch + tilt_angle, tilt_yaw),
+            # Phase 11: return upright, keep holding cup
+            (1, pour_x, pour_y, safe_z,
+             side_roll, side_pitch, tilt_yaw),
         ]
-        object_phases = {0, 1, 2, 3}
+        object_phases = {0, 1, 2, 3, 4, 5, 6}
         sketch = split_and_rotate_sketch_7d(
             sketch, object_phases, ang,
             object_center=np.array([cx, cy]),

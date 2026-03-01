@@ -26,8 +26,8 @@ from .franka_env import FrankaEnv
 
 class CupPourEnv(FrankaEnv):
 
-    # Cup dimensions (hollow octagonal tube)
-    CUP_RADIUS = 0.035       # 3.5cm outer radius
+    # Cup dimensions (hollow octagonal tube); 3cm radius = 6cm diameter (graspable)
+    CUP_RADIUS = 0.03        # 3cm outer radius
     CUP_HEIGHT = 0.08         # 8cm wall height
     CUP_WALL_THICKNESS = 0.004  # 4mm wall/bottom thickness
     N_CUP_WALLS = 8
@@ -48,8 +48,8 @@ class CupPourEnv(FrankaEnv):
     SPAWN_ANGLE_RANGE = (-np.pi / 3, np.pi / 3)
     CUP_BOWL_MIN_SEP = 0.12   # Minimum cup-bowl center distance
 
-    # Pour parameters
-    POUR_TILT_ANGLE = np.pi / 3  # 60-degree tilt
+    # Pour parameters — must exceed 90° so the opening faces downward
+    POUR_TILT_ANGLE = 2 * np.pi / 3  # 120-degree tilt (30° past horizontal)
 
     @property
     def name(self):
@@ -58,6 +58,34 @@ class CupPourEnv(FrankaEnv):
     @property
     def spawn_angle_range(self):
         return self.SPAWN_ANGLE_RANGE
+
+    def _randomize_object_scales(self):
+        """Resample spawn angle so cup stays at least CUP_BOWL_MIN_SEP from bowl."""
+        super()._randomize_object_scales()
+        if not self.randomize_rotation:
+            return
+        R = self.SPAWN_RADIUS
+        bowl_xy = self.BOWL_POS[:2]
+        B = np.linalg.norm(bowl_xy)
+        d = self.CUP_BOWL_MIN_SEP
+        if B < 1e-6 or R + B <= d:
+            return
+        # cos(theta) <= (R^2 + B^2 - d^2) / (2*R*B) for cup-bowl distance >= d
+        cos_max = (R * R + B * B - d * d) / (2 * R * B)
+        cos_max = np.clip(cos_max, -1.0, 1.0)
+        theta_min = np.arccos(cos_max)
+        lo, hi = self.SPAWN_ANGLE_RANGE
+        # Valid arcs: (lo, -theta_min] and [theta_min, hi)
+        left_lo, left_hi = lo, -theta_min
+        right_lo, right_hi = theta_min, hi
+        if self.rng.rand() < 0.5 and left_hi > left_lo:
+            ang = self.rng.uniform(left_lo, left_hi)
+        else:
+            if right_hi <= right_lo:
+                ang = self.rng.uniform(left_lo, left_hi) if left_hi > left_lo else lo
+            else:
+                ang = self.rng.uniform(right_lo, right_hi)
+        self._object_rotation = np.array([0.0, 0.0, ang])
 
     @property
     def default_front_camera(self):
@@ -86,11 +114,17 @@ class CupPourEnv(FrankaEnv):
     # ------------------------------------------------------------------ #
 
     def _create_task_objects(self):
-        # Disable snap-to-center: prevents ball displacement when cup snaps
-        self.grasp_snap_to_center = False
+        self.grasp_snap_to_center = True
+        self.grasp_min_closed_dist = 0.07
+        self.grasp_attach_max_dist = 0.05
 
         self._cup_id = self._create_hollow_cup()
         self._bowl_ids = self._create_hollow_bowl()
+
+        # Short settle so cup is stable before placing ball inside
+        for _ in range(25):
+            self.sim.stepSimulation()
+
         self._ball_id = self._create_ball()
 
         # Cup is graspable
@@ -107,8 +141,28 @@ class CupPourEnv(FrankaEnv):
         self._rigid_graspable.append(False)
 
         # Extra settling for ball to rest inside cup
-        for _ in range(150):
+        for _ in range(80):
             self.sim.stepSimulation()
+
+    def _snap_object_to_grasp(self, obj_id):
+        """Snap cup to finger midpoint and move the ball by the same displacement."""
+        grasp_center = self._get_grasp_reference_pos()
+        obj_pos, obj_ori = self.sim.getBasePositionAndOrientation(obj_id)
+        obj_euler = list(pybullet.getEulerFromQuaternion(obj_ori))
+
+        dx = grasp_center[0] - obj_pos[0]
+        dy = grasp_center[1] - obj_pos[1]
+
+        snapped_pos = [grasp_center[0], grasp_center[1], obj_pos[2]]
+        snapped_ori = pybullet.getQuaternionFromEuler([0.0, 0.0, obj_euler[2]])
+        self.sim.resetBasePositionAndOrientation(obj_id, snapped_pos, snapped_ori)
+
+        ball_pos, ball_ori = self.sim.getBasePositionAndOrientation(self._ball_id)
+        self.sim.resetBasePositionAndOrientation(
+            self._ball_id,
+            [ball_pos[0] + dx, ball_pos[1] + dy, ball_pos[2]],
+            ball_ori,
+        )
 
     def _disable_graspable_collisions(self):
         """Disable robot<->cup (ALL links) and robot<->ball."""
@@ -318,11 +372,11 @@ class CupPourEnv(FrankaEnv):
 
     def compute_reward(self):
         """
-        Reward: ball in bowl + cup proximity + tilt quality + release.
+        Reward: ball in bowl + cup proximity + tilt quality.
 
-        Full success (1.0): ball inside bowl and cup released.
-        Shaping: ball_in_bowl (0.50) + cup_proximity (0.20) +
-                 tilt_toward_bowl (0.15) + release (0.15).
+        Full success (1.0): ball inside bowl (cup stays held).
+        Shaping: ball_in_bowl (0.55) + cup_proximity (0.25) +
+                 tilt_toward_bowl (0.20).
         """
         ball_pos, _ = self.sim.getBasePositionAndOrientation(self._ball_id)
         ball_pos = np.array(ball_pos)
@@ -335,25 +389,20 @@ class CupPourEnv(FrankaEnv):
         ball_in_bowl_xy = ball_xy_dist < self.BOWL_RADIUS
         ball_in_bowl_z = 0 < ball_pos[2] < self.BOWL_HEIGHT + 0.02
         ball_in_bowl = ball_in_bowl_xy and ball_in_bowl_z
-        released = self.constraint_id is None
 
-        if ball_in_bowl and released:
+        if ball_in_bowl:
             return 1.0
 
         reward = 0.0
 
-        # Ball in bowl (0-0.50): PRIMARY
-        if ball_in_bowl:
-            reward += 0.50
-        else:
-            # Shaping: ball proximity to bowl center
-            reward += 0.50 * max(0, 1.0 - ball_xy_dist / 0.4)
+        # Ball in bowl proximity (0-0.55): PRIMARY
+        reward += 0.55 * max(0, 1.0 - ball_xy_dist / 0.4)
 
-        # Cup proximity to bowl edge (0-0.20)
+        # Cup proximity to bowl edge (0-0.25)
         cup_xy_dist = np.linalg.norm(cup_pos[:2] - bowl_center)
-        reward += 0.20 * max(0, 1.0 - cup_xy_dist / 0.4)
+        reward += 0.25 * max(0, 1.0 - cup_xy_dist / 0.4)
 
-        # Cup tilt toward bowl center (0-0.15)
+        # Cup tilt toward bowl center (0-0.20)
         rot = Rotation.from_quat(cup_quat)
         cup_z_axis = rot.apply([0, 0, 1])
         dir_to_bowl = bowl_center - cup_pos[:2]
@@ -365,10 +414,6 @@ class CupPourEnv(FrankaEnv):
                 0.0,
             ])
             tilt_toward = np.dot(cup_z_axis, dir_3d)
-            reward += 0.15 * max(0, tilt_toward)
-
-        # Release bonus (0.15): only if ball near bowl
-        if ball_xy_dist < self.BOWL_RADIUS * 2 and released:
-            reward += 0.15
+            reward += 0.20 * max(0, tilt_toward)
 
         return np.clip(reward, 0.0, 1.0)
