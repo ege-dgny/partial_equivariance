@@ -22,6 +22,7 @@ class GymPushTEnv:
 
     def __init__(self, cfg):
         self.cfg = cfg
+        self.args = cfg
         self.max_episode_length = cfg.max_episode_length
         self.num_eef = getattr(cfg, "num_eef", 1)
         self.dof = getattr(cfg, "dof", 2)
@@ -34,11 +35,23 @@ class GymPushTEnv:
         self._step_count = 0
         self._last_reward = 0.0
 
+    @property
+    def observation_space(self):
+        return gym.spaces.Box(
+            low=-np.inf, high=np.inf, shape=(18,), dtype=np.float32
+        )
+
+    @property
+    def action_space(self):
+        return gym.spaces.Box(
+            low=-1.0, high=1.0, shape=(2,), dtype=np.float32
+        )
+
     def _obs_to_state(self, obs):
-        """Convert gym obs dict → 18D state vector."""
+        """Convert gym obs dict → (1, 18) state matching (num_eef, eef_dim) convention."""
         kp = np.array(obs["environment_state"], dtype=np.float32)  # (16,)
         agent = np.array(obs["agent_pos"], dtype=np.float32)       # (2,)
-        return np.concatenate([kp, agent])  # (18,)
+        return np.concatenate([kp, agent]).reshape(1, 18)  # (1, 18)
 
     def reset(self):
         obs, info = self.env.reset()
