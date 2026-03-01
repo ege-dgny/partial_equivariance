@@ -78,6 +78,12 @@ class BookInsertEnv(FrankaEnv):
         # threshold would delay constraint creation until the lift phase.
         self.grasp_attach_max_dist = 0.06
 
+        # Initialize book spawn rotation like peg_insert: set/resample in task
+        # so --randomize_rotation is applied here regardless of base reset order.
+        if self.randomize_rotation:
+            lo, hi = self.spawn_angle_range
+            self._object_rotation[-1] = self.rng.rand() * (hi - lo) + lo
+
         self._book_id = self._create_book()
         self._case_ids = self._create_bookcase()
 
