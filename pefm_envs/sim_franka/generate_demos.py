@@ -1022,7 +1022,7 @@ def get_args():
     # Data
     parser.add_argument("--num_demos", type=int, default=1)
     parser.add_argument("--data_out_dir", type=str, default=None)
-    parser.add_argument("--data_rew_threshold", type=float, default=0.5)
+    parser.add_argument("--data_rew_threshold", type=float, default=0.9)
     parser.add_argument("--speed_multiplier", type=float, default=0.5)
 
     args, _ = parser.parse_known_args()
