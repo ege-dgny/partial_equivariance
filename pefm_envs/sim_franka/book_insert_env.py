@@ -10,8 +10,17 @@ and orientation).
 
 import numpy as np
 import pybullet
+from scipy.spatial.transform import Rotation
 
 from .franka_env import FrankaEnv
+
+
+def _transform_point_to_local(sim, body_id, point_world):
+    """Transform a world-frame point into the body's local frame (base)."""
+    pos, ori = sim.getBasePositionAndOrientation(body_id)
+    inv_pos, inv_ori = sim.invertTransform(pos, ori)
+    local_pos, _ = sim.multiplyTransforms(inv_pos, inv_ori, point_world, (0, 0, 0, 1))
+    return np.array(local_pos)
 
 
 class BookInsertEnv(FrankaEnv):
@@ -113,6 +122,58 @@ class BookInsertEnv(FrankaEnv):
         # Let objects settle
         for _ in range(50):
             self.sim.stepSimulation()
+
+    def _is_grasp_valid(self, obj_id, closest_point_world):
+        """Only allow grasp when the closest point is on the spine (side-grip).
+
+        Spine is at local Y = -BOOK_WIDTH/2. Rejects attachments triggered by
+        top/side faces so the book does not attach to a random part of the hand.
+        """
+        if obj_id != self._book_id:
+            return True
+        if closest_point_world is None:
+            return False
+        local_pt = _transform_point_to_local(self.sim, obj_id, closest_point_world)
+        spine_y = -self.BOOK_WIDTH / 2
+        tolerance = 0.025  # ~2.5 cm: allow spine edge and nearby binding
+        return abs(local_pt[1] - spine_y) <= tolerance
+
+    def _snap_book_to_grasp(self, obj_id):
+        """Snap book to canonical side-grip: spine at finger midpoint, standing."""
+        finger_mid = self._get_grasp_reference_pos()
+        _, ee_quat, _, _ = self.robot.get_ee_pos_quat_vel()
+        rot_mat = np.array(pybullet.getMatrixFromQuaternion(ee_quat)).reshape(3, 3)
+        hand_y = rot_mat[:, 1]  # hand Y = approach direction (wrist → fingers)
+
+        # Spine at finger midpoint; book center = spine + (BOOK_WIDTH/2) * book_y_axis
+        book_y_axis = hand_y.copy()
+        book_y_axis[2] = 0
+        n = np.linalg.norm(book_y_axis)
+        if n < 1e-6:
+            book_y_axis = np.array([1.0, 0.0, 0.0])
+        else:
+            book_y_axis /= n
+        book_center = finger_mid + (self.BOOK_WIDTH / 2) * book_y_axis
+
+        # Standing: book X = world Z, book Y = book_y_axis, book Z = X × Y
+        book_x_axis = np.array([0.0, 0.0, 1.0])
+        book_z_axis = np.cross(book_x_axis, book_y_axis)
+        book_z_axis /= np.linalg.norm(book_z_axis)
+        book_y_axis = np.cross(book_z_axis, book_x_axis)
+        rot = np.column_stack([book_x_axis, book_y_axis, book_z_axis])
+        r = Rotation.from_matrix(rot)
+        quat_xyzw = r.as_quat()
+        book_quat = (quat_xyzw[3], quat_xyzw[0], quat_xyzw[1], quat_xyzw[2])
+
+        self.sim.resetBasePositionAndOrientation(
+            obj_id, book_center.tolist(), book_quat
+        )
+
+    def _lock_object_in_place(self, obj_id):
+        """For the book, snap to side-grip pose first so it stays between the fingers."""
+        if obj_id == self._book_id:
+            self._snap_book_to_grasp(obj_id)
+        super()._lock_object_in_place(obj_id)
 
     def _create_book(self):
         """Create book standing vertically with random Z-rotation.

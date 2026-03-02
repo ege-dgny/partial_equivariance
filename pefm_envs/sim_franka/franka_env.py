@@ -490,6 +490,14 @@ class FrankaEnv:
                 return True
         return False
 
+    def _is_grasp_valid(self, obj_id, closest_point_world):
+        """Return True if attaching to this object at this point is valid.
+
+        Subclasses (e.g. BookInsertEnv) can override to require the closest
+        point to be on a specific part of the object (e.g. spine for side-grip).
+        """
+        return True
+
     def _attach_grasp(self, max_dist=None):
         """Find the closest graspable object and lock it to the EE.
 
@@ -508,11 +516,11 @@ class FrankaEnv:
         if max_dist is None:
             max_dist = self.grasp_attach_max_dist
         ee_pos = self._get_grasp_reference_pos()
-        target_obj_id, _ = self._find_closest_graspable(
+        target_obj_id, closest_point = self._find_closest_graspable(
             ee_pos, graspable_ids, max_dist=max_dist
         )
 
-        if target_obj_id is not None:
+        if target_obj_id is not None and self._is_grasp_valid(target_obj_id, closest_point):
             self._lock_object_in_place(target_obj_id)
 
     def _snap_object_to_grasp(self, obj_id):

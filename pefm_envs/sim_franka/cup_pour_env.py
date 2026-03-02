@@ -60,31 +60,38 @@ class CupPourEnv(FrankaEnv):
         return self.SPAWN_ANGLE_RANGE
 
     def _randomize_object_scales(self):
-        """Resample spawn angle so cup stays at least CUP_BOWL_MIN_SEP from bowl."""
+        """Ensure cup spawns at least CUP_BOWL_MIN_SEP from bowl.
+
+        Always enforces separation — even with randomize_rotation=False the
+        default angle (0) places the cup at (0.45, 0) which is only 0.05
+        from the bowl at (0.4, 0), well inside the bowl geometry.
+        """
         super()._randomize_object_scales()
-        if not self.randomize_rotation:
-            return
         R = self.SPAWN_RADIUS
         bowl_xy = self.BOWL_POS[:2]
         B = np.linalg.norm(bowl_xy)
         d = self.CUP_BOWL_MIN_SEP
         if B < 1e-6 or R + B <= d:
             return
-        # cos(theta) <= (R^2 + B^2 - d^2) / (2*R*B) for cup-bowl distance >= d
         cos_max = (R * R + B * B - d * d) / (2 * R * B)
         cos_max = np.clip(cos_max, -1.0, 1.0)
         theta_min = np.arccos(cos_max)
         lo, hi = self.SPAWN_ANGLE_RANGE
-        # Valid arcs: (lo, -theta_min] and [theta_min, hi)
-        left_lo, left_hi = lo, -theta_min
-        right_lo, right_hi = theta_min, hi
-        if self.rng.rand() < 0.5 and left_hi > left_lo:
-            ang = self.rng.uniform(left_lo, left_hi)
-        else:
-            if right_hi <= right_lo:
-                ang = self.rng.uniform(left_lo, left_hi) if left_hi > left_lo else lo
+
+        if self.randomize_rotation:
+            left_lo, left_hi = lo, -theta_min
+            right_lo, right_hi = theta_min, hi
+            if self.rng.rand() < 0.5 and left_hi > left_lo:
+                ang = self.rng.uniform(left_lo, left_hi)
             else:
-                ang = self.rng.uniform(right_lo, right_hi)
+                if right_hi <= right_lo:
+                    ang = self.rng.uniform(left_lo, left_hi) if left_hi > left_lo else lo
+                else:
+                    ang = self.rng.uniform(right_lo, right_hi)
+        else:
+            ang = self._object_rotation[2]
+            if abs(ang) < theta_min:
+                ang = theta_min
         self._object_rotation = np.array([0.0, 0.0, ang])
 
     @property
@@ -115,8 +122,8 @@ class CupPourEnv(FrankaEnv):
 
     def _create_task_objects(self):
         self.grasp_snap_to_center = True
-        self.grasp_min_closed_dist = 0.07
-        self.grasp_attach_max_dist = 0.05
+        self.grasp_min_closed_dist = getattr(self.args, 'grasp_min_closed_dist', 0.07)
+        self.grasp_attach_max_dist = getattr(self.args, 'grasp_attach_max_dist', 0.05)
 
         self._cup_id = self._create_hollow_cup()
         self._bowl_ids = self._create_hollow_bowl()
