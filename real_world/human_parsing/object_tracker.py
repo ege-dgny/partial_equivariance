@@ -4,7 +4,10 @@ Object Detection and Tracking using Grounded SAM + DEVA.
 Based on EquiBot paper Section F.1:
 - Uses Grounding DINO for open-vocabulary object detection
 - Uses SAM (Segment Anything Model) for instance segmentation
-- Uses DEVA for video object tracking with consistent IDs
+- Uses DEVA for video object tracking with consistent IDs (optional)
+
+When DEVA is not installed the tracker falls back to independent
+per-frame detection via Grounded SAM.  This is noisier but functional.
 
 References:
 - GroundingDINO: https://github.com/IDEA-Research/GroundingDINO
@@ -12,47 +15,54 @@ References:
 - DEVA: https://github.com/hkchengrex/Tracking-Anything-with-DEVA
 """
 
+import os
 import numpy as np
 from typing import Dict, List, Optional, Tuple
 import warnings
 
-# Lazy imports for heavy dependencies
-_grounding_dino = None
-_sam = None
-_deva = None
+# Repo root (Partial_Equivariance): real_world/human_parsing/object_tracker.py -> 3 levels up
+_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 
 
-def _load_grounding_dino():
-    """Lazy load Grounding DINO model."""
-    global _grounding_dino
-    if _grounding_dino is not None:
-        return _grounding_dino
+def _default_grounding_dino_paths():
+    """Resolve config and checkpoint to third_party/ and weights/ when present."""
+    config_in_third = os.path.join(
+        _REPO_ROOT, "third_party", "GroundingDINO",
+        "groundingdino", "config", "GroundingDINO_SwinT_OGC.py"
+    )
+    checkpoint_in_weights = os.path.join(_REPO_ROOT, "weights", "groundingdino_swint_ogc.pth")
+    config = config_in_third if os.path.isfile(config_in_third) else None
+    checkpoint = checkpoint_in_weights if os.path.isfile(checkpoint_in_weights) else None
+    return config, checkpoint
 
+
+def _load_grounding_dino(device: str = "cpu"):
+    """Load Grounding DINO model onto *device*."""
     try:
         from groundingdino.util.inference import load_model, predict
         import groundingdino.datasets.transforms as T
-        from groundingdino.util import box_ops
+        from groundingdino.util.box_ops import box_cxcywh_to_xyxy
 
-        # Load model with default weights
-        # Users should set GROUNDING_DINO_CONFIG and GROUNDING_DINO_CHECKPOINT env vars
-        import os
-        config_path = os.environ.get(
-            'GROUNDING_DINO_CONFIG',
-            'GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py'
-        )
-        checkpoint_path = os.environ.get(
-            'GROUNDING_DINO_CHECKPOINT',
-            'weights/groundingdino_swint_ogc.pth'
-        )
+        config_path = os.environ.get("GROUNDING_DINO_CONFIG")
+        checkpoint_path = os.environ.get("GROUNDING_DINO_CHECKPOINT")
+        if not config_path or not checkpoint_path:
+            default_config, default_ckpt = _default_grounding_dino_paths()
+            config_path = config_path or default_config or "GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py"
+            checkpoint_path = checkpoint_path or default_ckpt or "weights/groundingdino_swint_ogc.pth"
+        if not os.path.isfile(config_path):
+            raise FileNotFoundError(f"Grounding DINO config not found: {config_path}")
+        if not os.path.isfile(checkpoint_path):
+            raise FileNotFoundError(f"Grounding DINO checkpoint not found: {checkpoint_path}")
 
         model = load_model(config_path, checkpoint_path)
-        _grounding_dino = {
+        model = model.to(device)
+
+        return {
             'model': model,
             'predict': predict,
             'transforms': T,
-            'box_ops': box_ops,
+            'box_cxcywh_to_xyxy': box_cxcywh_to_xyxy,
         }
-        return _grounding_dino
 
     except ImportError as e:
         warnings.warn(
@@ -63,66 +73,34 @@ def _load_grounding_dino():
         return None
 
 
-def _load_sam():
-    """Lazy load SAM model."""
-    global _sam
-    if _sam is not None:
-        return _sam
-
+def _load_sam(device: str = "cpu"):
+    """Load SAM model onto *device*."""
     try:
         from segment_anything import sam_model_registry, SamPredictor
 
-        import os
-        checkpoint_path = os.environ.get(
-            'SAM_CHECKPOINT',
-            'weights/sam_vit_h_4b8939.pth'
-        )
+        checkpoint_path = os.environ.get("SAM_CHECKPOINT")
+        if not checkpoint_path:
+            default_ckpt = os.path.join(_REPO_ROOT, "weights", "sam_vit_h_4b8939.pth")
+            checkpoint_path = default_ckpt if os.path.isfile(default_ckpt) else "weights/sam_vit_h_4b8939.pth"
         model_type = os.environ.get('SAM_MODEL_TYPE', 'vit_h')
 
         sam = sam_model_registry[model_type](checkpoint=checkpoint_path)
-        sam.cuda()
+        sam.to(device)
         predictor = SamPredictor(sam)
 
-        _sam = {'predictor': predictor}
-        return _sam
+        return {'predictor': predictor}
 
     except ImportError as e:
         warnings.warn(
             f"SAM not installed: {e}\n"
-            "Install with: pip install segment-anything\n"
-            "Or clone: https://github.com/facebookresearch/segment-anything"
-        )
-        return None
-
-
-def _load_deva():
-    """Lazy load DEVA tracker."""
-    global _deva
-    if _deva is not None:
-        return _deva
-
-    try:
-        # DEVA integration - this is a placeholder for the actual import
-        # The exact import depends on how DEVA is installed
-        from deva.inference.inference_core import DEVAInferenceCore
-        from deva.inference.eval_args import add_common_eval_args
-
-        # Default config - users should customize
-        _deva = {'core': DEVAInferenceCore}
-        return _deva
-
-    except ImportError as e:
-        warnings.warn(
-            f"DEVA not installed: {e}\n"
-            "Install with: pip install deva-track\n"
-            "Or clone: https://github.com/hkchengrex/Tracking-Anything-with-DEVA"
+            "Install with: pip install git+https://github.com/facebookresearch/segment-anything.git\n"
         )
         return None
 
 
 class ObjectTracker:
     """
-    Grounded SAM + DEVA for object detection and tracking.
+    Grounded SAM + (optional) DEVA for object detection and tracking.
 
     Outputs segmented point cloud containing only objects of interest.
 
@@ -130,7 +108,7 @@ class ObjectTracker:
         tracker = ObjectTracker(text_prompt="cup. block. peg.")
         object_pc, masks = tracker.detect_and_segment(rgb, depth, intrinsics)
 
-        # For video tracking:
+        # For video tracking (falls back to per-frame detection if DEVA is missing):
         for frame in video:
             object_pc, masks = tracker.track(rgb, depth, intrinsics, prev_masks)
     """
@@ -142,40 +120,26 @@ class ObjectTracker:
         box_threshold: float = 0.3,
         text_threshold: float = 0.25,
     ):
-        """
-        Initialize object tracker.
-
-        Args:
-            text_prompt: Text description of objects to detect (e.g., "cup. block.")
-            device: Device to run models on ('cuda' or 'cpu')
-            box_threshold: Confidence threshold for bounding box detection
-            text_threshold: Confidence threshold for text matching
-        """
         self.text_prompt = text_prompt
         self.device = device
         self.box_threshold = box_threshold
         self.text_threshold = text_threshold
 
-        # Lazy-load models on first use
         self._grounding_dino = None
         self._sam = None
-        self._deva = None
 
-        # Tracking state
         self._prev_masks = None
         self._tracking_initialized = False
 
     def _ensure_models_loaded(self):
-        """Load models if not already loaded."""
         if self._grounding_dino is None:
-            self._grounding_dino = _load_grounding_dino()
+            self._grounding_dino = _load_grounding_dino(self.device)
         if self._sam is None:
-            self._sam = _load_sam()
+            self._sam = _load_sam(self.device)
 
-    def _ensure_deva_loaded(self):
-        """Load DEVA tracker if not already loaded."""
-        if self._deva is None:
-            self._deva = _load_deva()
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
 
     def detect_and_segment(
         self,
@@ -187,31 +151,26 @@ class ObjectTracker:
         Single-frame detection and segmentation.
 
         Args:
-            rgb_image: (H, W, 3) RGB image (BGR format from cv2 is OK)
-            depth_image: (H, W) depth image (uint16 in mm)
+            rgb_image: (H, W, 3) BGR image from cv2
+            depth_image: (H, W) uint16 depth in mm
             intrinsics: dict with 'fx', 'fy', 'ppx', 'ppy'
 
         Returns:
-            object_pc: (N, 3) segmented point cloud of objects
+            object_pc: (N, 3) segmented point cloud
             masks: dict mapping object_id -> (H, W) binary mask
         """
         self._ensure_models_loaded()
 
         if self._grounding_dino is None or self._sam is None:
-            # Fallback: return empty results if models not available
             warnings.warn("Models not loaded, returning empty point cloud")
             return np.zeros((0, 3), dtype=np.float32), {}
 
-        # 1. Run Grounding DINO for detection
         boxes, labels, scores = self._detect_objects(rgb_image)
 
         if len(boxes) == 0:
             return np.zeros((0, 3), dtype=np.float32), {}
 
-        # 2. Run SAM for segmentation
         masks = self._segment_from_boxes(rgb_image, boxes)
-
-        # 3. Convert masked depth to point cloud
         object_pc = self._masked_depth_to_pc(depth_image, masks, intrinsics)
 
         return object_pc, masks
@@ -224,36 +183,20 @@ class ObjectTracker:
         prev_masks: Optional[Dict[int, np.ndarray]] = None,
     ) -> Tuple[np.ndarray, Dict[int, np.ndarray]]:
         """
-        Track objects across frames using DEVA.
+        Track objects across frames.
 
-        Args:
-            rgb_image: (H, W, 3) RGB image
-            depth_image: (H, W) depth image
-            intrinsics: camera intrinsics
-            prev_masks: masks from previous frame (None for first frame)
-
-        Returns:
-            object_pc: (N, 3) tracked object point cloud
-            masks: updated masks with consistent IDs
+        Currently re-runs Grounded SAM per frame (no temporal DEVA).
+        Object IDs may not be consistent across frames.
         """
-        if prev_masks is None:
-            # First frame: detect and segment
-            return self.detect_and_segment(rgb_image, depth_image, intrinsics)
+        # TODO: integrate DEVA for temporally consistent mask propagation.
+        #  - Initialize DEVA with masks from the first frame.
+        #  - On subsequent frames, propagate masks and only re-detect
+        #    every N frames to pick up new objects.
+        return self.detect_and_segment(rgb_image, depth_image, intrinsics)
 
-        self._ensure_deva_loaded()
-
-        if self._deva is None:
-            # Fallback: re-detect each frame if DEVA not available
-            warnings.warn("DEVA not loaded, falling back to per-frame detection")
-            return self.detect_and_segment(rgb_image, depth_image, intrinsics)
-
-        # Track masks using DEVA
-        masks = self._track_masks(rgb_image, prev_masks)
-
-        # Convert to point cloud
-        object_pc = self._masked_depth_to_pc(depth_image, masks, intrinsics)
-
-        return object_pc, masks
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
 
     def _detect_objects(
         self, rgb_image: np.ndarray
@@ -262,29 +205,25 @@ class ObjectTracker:
         Detect objects using Grounding DINO.
 
         Returns:
-            boxes: (N, 4) bounding boxes in xyxy format
+            boxes: (N, 4) bounding boxes in **xyxy pixel** format
             labels: list of N label strings
             scores: (N,) confidence scores
         """
         import torch
         from PIL import Image
 
-        # Convert to PIL Image
-        if rgb_image.shape[2] == 3:
-            # Assume BGR from cv2, convert to RGB
-            rgb_image = rgb_image[..., ::-1]
-        pil_image = Image.fromarray(rgb_image)
+        rgb_for_pil = rgb_image[..., ::-1].copy()  # BGR -> RGB, contiguous
+        pil_image = Image.fromarray(rgb_for_pil)
 
-        # Apply transforms
         transform = self._grounding_dino['transforms'].Compose([
             self._grounding_dino['transforms'].RandomResize([800], max_size=1333),
             self._grounding_dino['transforms'].ToTensor(),
-            self._grounding_dino['transforms'].Normalize([0.485, 0.456, 0.406],
-                                                         [0.229, 0.224, 0.225]),
+            self._grounding_dino['transforms'].Normalize(
+                [0.485, 0.456, 0.406], [0.229, 0.224, 0.225]
+            ),
         ])
         image_transformed, _ = transform(pil_image, None)
 
-        # Run detection
         boxes, logits, phrases = self._grounding_dino['predict'](
             model=self._grounding_dino['model'],
             image=image_transformed,
@@ -293,64 +232,41 @@ class ObjectTracker:
             text_threshold=self.text_threshold,
         )
 
-        # Convert boxes to image coordinates
-        H, W = rgb_image.shape[:2]
-        boxes = boxes * torch.tensor([W, H, W, H])
-        boxes = boxes.cpu().numpy()
-        scores = logits.cpu().numpy()
+        if len(boxes) == 0:
+            return np.empty((0, 4)), [], np.empty(0)
 
-        return boxes, phrases, scores
+        # boxes from predict() are normalized cxcywh -> convert to xyxy
+        boxes_xyxy = self._grounding_dino['box_cxcywh_to_xyxy'](boxes)
+
+        H, W = rgb_image.shape[:2]
+        boxes_xyxy = boxes_xyxy * torch.tensor(
+            [W, H, W, H], device=boxes_xyxy.device, dtype=boxes_xyxy.dtype
+        )
+        boxes_np = boxes_xyxy.cpu().numpy()
+        scores_np = logits.cpu().numpy()
+
+        return boxes_np, phrases, scores_np
 
     def _segment_from_boxes(
         self, rgb_image: np.ndarray, boxes: np.ndarray
     ) -> Dict[int, np.ndarray]:
-        """
-        Generate segmentation masks from bounding boxes using SAM.
-
-        Returns:
-            masks: dict mapping object_id -> (H, W) binary mask
-        """
+        """Generate segmentation masks from xyxy bounding boxes using SAM."""
         predictor = self._sam['predictor']
 
-        # Set image
-        if rgb_image.shape[2] == 3:
-            rgb_image = rgb_image[..., ::-1]  # BGR to RGB
-        predictor.set_image(rgb_image)
+        rgb_for_sam = rgb_image[..., ::-1].copy()  # BGR -> RGB, contiguous
+        predictor.set_image(rgb_for_sam)
 
         masks = {}
         for i, box in enumerate(boxes):
-            # Predict mask from box
             mask, score, _ = predictor.predict(
                 point_coords=None,
                 point_labels=None,
                 box=box,
                 multimask_output=False,
             )
-            masks[i] = mask[0]  # Take first mask
+            masks[i] = mask[0]
 
         return masks
-
-    def _track_masks(
-        self, rgb_image: np.ndarray, prev_masks: Dict[int, np.ndarray]
-    ) -> Dict[int, np.ndarray]:
-        """
-        Track masks across frames using DEVA.
-
-        This is a simplified implementation - full DEVA integration
-        would require more setup.
-        """
-        # Placeholder: for now, just re-segment
-        # Full DEVA would propagate masks with consistent IDs
-        self._ensure_models_loaded()
-
-        if self._grounding_dino is None or self._sam is None:
-            return prev_masks
-
-        boxes, labels, scores = self._detect_objects(rgb_image)
-        if len(boxes) == 0:
-            return {}
-
-        return self._segment_from_boxes(rgb_image, boxes)
 
     def _masked_depth_to_pc(
         self,
@@ -358,25 +274,12 @@ class ObjectTracker:
         masks: Dict[int, np.ndarray],
         intrinsics: dict,
     ) -> np.ndarray:
-        """
-        Convert depth to point cloud, keeping only masked pixels.
-
-        Args:
-            depth_image: (H, W) uint16 depth in mm
-            masks: dict of object_id -> (H, W) binary mask
-            intrinsics: camera intrinsics
-
-        Returns:
-            pc: (N, 3) point cloud
-        """
         from real_world.utils.point_cloud import depth_to_pointcloud
 
-        # Combine all masks
         combined_mask = np.zeros(depth_image.shape, dtype=bool)
         for mask in masks.values():
             combined_mask |= mask
 
-        # Convert to point cloud with mask
         pc = depth_to_pointcloud(
             depth_image,
             intrinsics,
