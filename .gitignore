@@ -42,6 +42,10 @@ ping_pong_ball_free_fall/
 tests/
 
 
+# Third-party deps (installed by scripts/setup_real_world.sh)
+third_party/
+weights/
+
 # Checkpoints
 *.pth
 *.pt

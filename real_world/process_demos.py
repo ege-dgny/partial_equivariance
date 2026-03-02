@@ -17,13 +17,19 @@ Usage:
         --input_dir raw_demos \
         --output_dir processed
 
+    # With human parsing + save overlay videos
+    python -m real_world.process_demos \
+        --input_dir raw_demos \
+        --output_dir processed \
+        --use_human_parsing --save_vis
+
 Output format:
     processed/
         pcs/
             episode_000_t0000.npz  # {pc, eef_pos, action}
-            episode_000_t0001.npz
             ...
-            episode_001_t0000.npz
+        vis/                        # (when --save_vis)
+            episode_000.mp4         # overlay of masks + hand keypoints
             ...
 """
 
@@ -32,7 +38,84 @@ import glob
 import argparse
 import json
 import numpy as np
+import cv2
 from tqdm import tqdm
+
+
+# Hand keypoint skeleton for drawing (21 points: wrist + 5 fingers x 4)
+HAND_SKELETON_EDGES = [
+    (0, 1), (1, 2), (2, 3), (3, 4),
+    (0, 5), (5, 6), (6, 7), (7, 8),
+    (0, 9), (9, 10), (10, 11), (11, 12),
+    (0, 13), (13, 14), (14, 15), (15, 16),
+    (0, 17), (17, 18), (18, 19), (19, 20),
+]
+
+
+def write_episode_vis(
+    episode_dir: str,
+    frames: list,
+    output_path: str,
+    fps: int = 6,
+) -> None:
+    """Write a video overlaying parsing results (object masks + hand keypoints) on color frames."""
+    color_files = sorted(glob.glob(os.path.join(episode_dir, "color_*.png")))
+    if not color_files:
+        return
+
+    first_idx = frames[0]["frame_idx"]
+    first_img = cv2.imread(color_files[first_idx])
+    if first_img is None:
+        return
+    H, W = first_img.shape[:2]
+
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    writer = cv2.VideoWriter(output_path, fourcc, float(fps), (W, H))
+
+    mask_color = (0, 180, 255)
+    kp_color = (0, 255, 0)
+    skeleton_color = (0, 200, 255)
+
+    for frame in frames:
+        idx = frame["frame_idx"]
+        if idx >= len(color_files):
+            continue
+        color = cv2.imread(color_files[idx])
+        if color is None:
+            continue
+        overlay = color.copy()
+
+        vis_masks = frame.get("vis_masks")
+        if vis_masks:
+            combined = np.zeros((H, W), dtype=np.uint8)
+            for m in vis_masks.values():
+                m = np.asarray(m)
+                if m.ndim == 3:
+                    m = m[0]
+                if m.shape[:2] == (H, W):
+                    combined = np.maximum(combined, (m.astype(np.uint8) * 255))
+            if combined.max() > 0:
+                mask_bgr = np.zeros_like(overlay)
+                mask_bgr[combined > 0] = mask_color
+                cv2.addWeighted(mask_bgr, 0.35, overlay, 1.0, 0, overlay)
+
+        kp_2d = frame.get("vis_keypoints_2d")
+        if kp_2d is not None and len(kp_2d) >= 21:
+            pts = np.asarray(kp_2d[:21], dtype=np.int32)
+            for i, j in HAND_SKELETON_EDGES:
+                if 0 <= i < len(pts) and 0 <= j < len(pts):
+                    pt1 = (int(pts[i, 0]), int(pts[i, 1]))
+                    pt2 = (int(pts[j, 0]), int(pts[j, 1]))
+                    cv2.line(overlay, pt1, pt2, skeleton_color, 2)
+            for k in range(min(21, len(pts))):
+                cx, cy = int(pts[k, 0]), int(pts[k, 1])
+                if 0 <= cx < W and 0 <= cy < H:
+                    cv2.circle(overlay, (cx, cy), 4, kp_color, -1)
+
+        writer.write(overlay)
+
+    writer.release()
 
 
 def load_intrinsics(intrinsics_path: str) -> dict:
@@ -57,11 +140,14 @@ def process_with_human_parsing(
     target_fps: int,
     num_points: int,
     device: str,
+    save_vis: bool = False,
+    use_mock_hand_detector: bool = False,
 ):
     """
     Process episode using full human parsing pipeline.
 
-    Uses Grounded SAM for object detection and HaMeR for hand detection.
+    Uses Grounded SAM for object detection and HaMeR for hand detection
+    (or mock hand detector if use_mock_hand_detector=True or HaMeR unavailable).
     """
     from real_world.human_parsing import HumanDemoParser
 
@@ -69,12 +155,14 @@ def process_with_human_parsing(
         object_prompt=object_prompt,
         device=device,
         num_points=num_points,
+        use_mock_hand_detector=use_mock_hand_detector,
     )
 
     frames = parser.parse_episode(
         episode_dir,
         intrinsics,
         target_fps=target_fps,
+        save_vis=save_vis,
     )
 
     return frames
@@ -208,6 +296,14 @@ def main():
         '--min_frames', type=int, default=5,
         help='Minimum frames per episode to include (default: 5)'
     )
+    parser.add_argument(
+        '--save_vis', action='store_true',
+        help='Save overlay videos (masks + hand keypoints) to output_dir/vis/ (only with --use_human_parsing)'
+    )
+    parser.add_argument(
+        '--mock_hands', action='store_true',
+        help='Use mock hand detector (e.g. when HaMeR is not installed on M1); still runs object tracking'
+    )
 
     args = parser.parse_args()
 
@@ -234,6 +330,9 @@ def main():
     # Setup output directory
     output_pcs = os.path.join(args.output_dir, 'pcs')
     os.makedirs(output_pcs, exist_ok=True)
+    output_vis = os.path.join(args.output_dir, 'vis')
+    if args.save_vis and args.use_human_parsing:
+        os.makedirs(output_vis, exist_ok=True)
 
     # Copy intrinsics to output
     output_intrinsics = os.path.join(args.output_dir, 'intrinsics.json')
@@ -257,6 +356,8 @@ def main():
                     args.target_fps,
                     args.num_points,
                     args.device,
+                    save_vis=args.save_vis,
+                    use_mock_hand_detector=args.mock_hands,
                 )
             else:
                 frames = process_simple(
@@ -275,6 +376,13 @@ def main():
 
             # Save as NPZ
             save_frames_as_npz(frames, output_pcs, ep_name)
+            if args.save_vis and args.use_human_parsing and frames and 'vis_masks' in frames[0]:
+                write_episode_vis(
+                    ep_dir,
+                    frames,
+                    os.path.join(output_vis, f"{ep_name}.mp4"),
+                    args.input_fps,
+                )
             processed_count += 1
             total_frames += len(frames)
 
@@ -288,6 +396,8 @@ def main():
     print(f"  Skipped: {skipped_count} episodes")
     print(f"  Total frames: {total_frames}")
     print(f"  Output: {output_pcs}")
+    if args.save_vis and args.use_human_parsing and processed_count > 0:
+        print(f"  Vis:   {output_vis}")
 
     # Save metadata
     metadata = {

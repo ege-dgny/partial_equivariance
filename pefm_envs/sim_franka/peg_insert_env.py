@@ -89,12 +89,9 @@ class PegInsertEnv(FrankaEnv):
     PEG_SOCKET_MIN_SEP = 0.12
 
     def _create_task_objects(self):
-        # Sample C4 rotation for peg
-        demo_mode = getattr(self.args, "demo_mode", False)
-        if demo_mode:
-            self._peg_spawn_rotation = 0.0
-        else:
-            self._peg_spawn_rotation = self.rng.choice(self.C4_ROTATIONS)
+        # Sample C4 rotation for peg (both demos and eval: training needs all 4 views
+        # so PEFM selector can learn when to be equivariant vs. collapse)
+        self._peg_spawn_rotation = self.rng.choice(self.C4_ROTATIONS)
 
         # Rejection-sample spawn angle to avoid placing peg on the socket
         socket_xy = self.SOCKET_POS[:2] + self.scene_offset
