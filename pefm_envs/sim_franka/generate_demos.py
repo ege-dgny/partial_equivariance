@@ -611,73 +611,58 @@ def run_demo(args, counter=0):
         )
 
     elif args.task_name == "book_insert":
+        # Side-grasp book, carry to holder, lower in (cup_pour pattern)
         book_pos, _ = env.sim.getBasePositionAndOrientation(env._book_id)
         bx, by = book_pos[0], book_pos[1]
         bl = env.BOOK_LENGTH   # 0.15 — height when standing
-        bw = env.BOOK_WIDTH    # 0.10
-        # Target shelf position (book center target)
-        sx, sy, sz = env._target_pos[0], env._target_pos[1], env._target_pos[2]
+        hx, hy = env.HOLDER_POS[0], env.HOLDER_POS[1]
         safe_z = 0.30
-        # Shelf opening faces -Y; front edge Y coordinate
-        shelf_front_y = env.CASE_POS[1] - env.CASE_DEPTH / 2
 
-        # Spine is at local Y = -WIDTH/2 from book center.
-        spine_y = -bw / 2  # object-relative Y offset to spine
-        approach_offset = 0.08  # horizontal standoff from spine
-
-        # Side-grip orientation: approach from -Y toward spine (+Y),
-        # fingers close along X (clamping flat faces), gripper body vertical.
+        # Side-grip orientation (same as cup_pour):
+        # EEF Z = [0,1,0] (approach from -Y toward +Y),
+        # EEF Y = [1,0,0] (fingers close along X),
+        # EEF X = [0,0,1] (gripper body vertical).
         side_roll = -np.pi / 2
         side_pitch = -np.pi / 2
-        grasp_z = bl / 2  # mid-height of standing book
+        grasp_z = bl * 0.5
+        approach_offset = 0.08
 
-        # panda_hand sits ~3cm behind the finger tips along EEF Z.
-        # Position panda_hand behind the spine so fingers land at the spine.
-        hand_offset = 0.03
-        grasp_y = spine_y - hand_offset
-
-        # After the constraint is created, the book center is
-        # (bw/2 + hand_offset) ahead of panda_hand along +Y (at yaw=0).
-        eef_y_off = -(bw / 2 + hand_offset)
+        # World-frame EEF offset: at yaw=0, book center is ~12cm in +Y
+        # from panda_hand due to finger-midpoint snap + CoM/URDF IK chain.
+        # Same pattern as cup_pour's pour_y offset.
+        place_y = hy - 0.12
 
         # 7-dim waypoints: (grip, x, y, z, roll, pitch, yaw)
         sketch = [
-            # Phase 0 (object-relative): safe height, offset from spine
-            (0, 0.0, grasp_y - approach_offset, safe_z,
+            # Phase 0 (object-relative): safe height, offset from center (-Y)
+            (0, 0.0, -approach_offset, safe_z,
              side_roll, side_pitch, 0.0),
-            # Phase 1 (object-relative): lower to grasp height, still offset
-            (0, 0.0, grasp_y - approach_offset, grasp_z,
+            # Phase 1 (object-relative): lower to grasp height
+            (0, 0.0, -approach_offset, grasp_z,
              side_roll, side_pitch, 0.0),
-            # Phase 2 (object-relative): approach toward spine (grip closes
-            #   at the last step of this phase, starting the dwell counter)
-            (1, 0.0, grasp_y, grasp_z,
+            # Phase 2 (object-relative): slide to book center, grip closes
+            (1, 0.0, 0.0, grasp_z,
              side_roll, side_pitch, 0.0),
-            # Phases 3-5: dwell at grasp position with grip=1 so the
-            # constraint fires before any lifting begins. Each zero-distance
-            # phase yields 1 step; prev_grip=1 so grip=1 for all sub-steps.
-            (1, 0.0, grasp_y, grasp_z,
+            # Phases 3-5: dwell for grasp constraint
+            (1, 0.0, 0.0, grasp_z,
              side_roll, side_pitch, 0.0),
-            (1, 0.0, grasp_y, grasp_z,
+            (1, 0.0, 0.0, grasp_z,
              side_roll, side_pitch, 0.0),
-            (1, 0.0, grasp_y, grasp_z,
+            (1, 0.0, 0.0, grasp_z,
              side_roll, side_pitch, 0.0),
-            # Phase 6 (object-relative): lift with book
-            (1, 0.0, grasp_y, safe_z,
+            # Phase 6 (object-relative): lift
+            (1, 0.0, 0.0, safe_z,
              side_roll, side_pitch, 0.0),
-            # Phase 7 (world-frame): move toward shelf (yaw resets to 0)
-            (1, sx, shelf_front_y - 0.08 + eef_y_off, safe_z,
+            # Phase 7 (world-frame): move above holder (offset for EEF chain)
+            (1, hx, place_y, safe_z,
              side_roll, side_pitch, 0.0),
-            # Phase 8 (world-frame): lower to slot height
-            (1, sx, shelf_front_y - 0.05 + eef_y_off, sz,
+            # Phase 8 (world-frame): lower into holder
+            (1, hx, place_y, bl * 0.55,
              side_roll, side_pitch, 0.0),
-            # Phase 9 (world-frame): slide into shelf along +Y
-            (1, sx, sy + eef_y_off, sz,
-             side_roll, side_pitch, 0.0),
-            # Phase 10 (world-frame): release
-            (0, sx, sy + eef_y_off, sz,
+            # Phase 9 (world-frame): release
+            (0, hx, place_y, bl * 0.55,
              side_roll, side_pitch, 0.0),
         ]
-        # Phases 0-6 are object-relative, 7-10 are world-frame
         object_phases = {0, 1, 2, 3, 4, 5, 6}
         sketch = split_and_rotate_sketch_7d(
             sketch, object_phases, ang,
