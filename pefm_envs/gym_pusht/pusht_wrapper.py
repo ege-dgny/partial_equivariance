@@ -48,7 +48,7 @@ class GymPushTEnv:
         )
 
     def _obs_to_state(self, obs):
-        """Convert gym obs dict → (1, 18) state matching (num_eef, eef_dim) convention."""
+        """Convert gym obs dict → (1, 18) state matching (num_eef, eef_dim) for vec_eval."""
         kp = np.array(obs["environment_state"], dtype=np.float32)  # (16,)
         agent = np.array(obs["agent_pos"], dtype=np.float32)       # (2,)
         return np.concatenate([kp, agent]).reshape(1, 18)  # (1, 18)

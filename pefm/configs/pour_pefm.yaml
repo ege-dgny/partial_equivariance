@@ -5,10 +5,6 @@ env:
   env_class: pour
   args:
     max_episode_length: 80
-    cam_resolution: 256
-    vis: false
-    freq: 5
-    ac_noise: 0.0
 
 model:
   symmetry:

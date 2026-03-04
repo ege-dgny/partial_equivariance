@@ -66,9 +66,7 @@ def run_eval(
         for i in range(obs_horizon):
             obs_history.append(obs)
         images[-1].append(rgb_render["images"][0][..., :3])
-        dof = getattr(agent, "dof", 7)
-        if dof > 2:
-            grip_state = float(np.array(obs["state"])[..., -1].reshape(-1)[0])
+        grip_state = float(np.array(obs["state"])[..., -1].reshape(-1)[0])
 
         if ep_ix == 0:
             sample_pc = render["pc"]
@@ -115,16 +113,11 @@ def run_eval(
                     break
                 agent_ac = ac[ac_ix] if len(ac.shape) > 1 else ac
                 agent_ac = np.array(agent_ac, copy=True)
-                if dof > 2:
-                    if agent_ac[0] > 0.9:
-                        grip_state = 1.0
-                    elif agent_ac[0] < 0.1:
-                        grip_state = 0.0
-                    agent_ac[0] = grip_state
-                if np.isnan(agent_ac).any():
-                    print(f"Warning: NaN in action, skipping step. Check model weights.", flush=True)
-                    ac_dict = None
-                    break
+                if agent_ac[0] > 0.9:
+                    grip_state = 1.0
+                elif agent_ac[0] < 0.1:
+                    grip_state = 0.0
+                agent_ac[0] = grip_state
                 state, rew, done, info = env.step(agent_ac, dummy_reward=True)
                 if hasattr(env, "visualize_eef_frame"):
                     env.visualize_eef_frame(state)
@@ -213,11 +206,6 @@ def main(cfg):
             config=wandb_config,
         )
     np.random.seed(cfg.seed)
-    torch.manual_seed(cfg.seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(cfg.seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
 
     if cfg.env.vectorize:
         env_class = get_env_class(cfg.env.env_class)

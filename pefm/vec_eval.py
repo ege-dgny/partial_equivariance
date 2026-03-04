@@ -73,7 +73,7 @@ def run_eval(
             agent_obs = dict()
             for k in obs.keys():
                 if k == "pc":
-                    agent_obs[k] = [o[k] for o in obs_history[-obs_horizon:]]
+                    agent_obs[k] = [np.stack(o[k]) for o in obs_history[-obs_horizon:]]
                 else:
                     agent_obs[k] = np.stack([o[k] for o in obs_history[-obs_horizon:]])
 

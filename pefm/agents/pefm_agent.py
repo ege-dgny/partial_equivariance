@@ -76,15 +76,10 @@ class PEFMAgent(object):
                 state_coupled = []
                 for eef_idx in range(self.num_eef):
                     off = eef_idx * eef_dim
-                    if eef_dim % 2 == 0 and eef_dim != 13:
-                        # 2D task: all dims are consecutive xy pairs
-                        for i in range(eef_dim // 2):
-                            state_coupled.append([off + 2*i, off + 2*i + 1])
-                    else:
-                        state_coupled.append([off + 0, off + 1])    # pos XY
-                        state_coupled.append([off + 3, off + 4])    # xdir XY
-                        state_coupled.append([off + 6, off + 7])    # zdir XY
-                        state_coupled.append([off + 9, off + 10])   # grav XY
+                    state_coupled.append([off + 0, off + 1])    # pos XY
+                    state_coupled.append([off + 3, off + 4])    # xdir XY
+                    state_coupled.append([off + 6, off + 7])    # zdir XY
+                    state_coupled.append([off + 9, off + 10])   # grav XY
                 self.state_normalizer = RotationAwareNormalizer(
                     flattened_state, coupled_groups=state_coupled
                 )
@@ -100,12 +95,9 @@ class PEFMAgent(object):
                 ac_coupled = []
                 for eef_idx in range(self.num_eef):
                     off = eef_idx * self.dof
-                    if self.dof == 2:
-                        ac_coupled.append([off + 0, off + 1])   # xy
-                    else:
-                        ac_coupled.append([off + 1, off + 2])       # vel XY
-                        if self.dof >= 7:
-                            ac_coupled.append([off + 4, off + 5])   # rot-vel XY
+                    ac_coupled.append([off + 1, off + 2])       # vel XY
+                    if self.dof >= 7:
+                        ac_coupled.append([off + 4, off + 5])   # rot-vel XY
                 self.ac_normalizer = RotationAwareNormalizer(
                     flattened_gt_action, coupled_groups=ac_coupled
                 )
@@ -187,8 +179,10 @@ class PEFMAgent(object):
                         .to(self.device)
                         .float()
                     )
+            print(f"[DBG act] obs pc nan: {torch_obs['pc'].isnan().any()}, state nan: {torch_obs['state'].isnan().any()}", flush=True)
             with torch.no_grad():
                 raw_ac_dict = self.actor(torch_obs, debug=debug)
+            print(f"[DBG act] raw_ac nan: {raw_ac_dict['ac'].isnan().any()}, min={raw_ac_dict['ac'].min():.4f}, max={raw_ac_dict['ac'].max():.4f}", flush=True)
         else:
             raw_ac_dict = dict(
                 ac=torch.zeros(
@@ -243,7 +237,6 @@ class PEFMAgent(object):
         # Backward
         self.optimizer.zero_grad()
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.actor.nets.parameters(), max_norm=1.0)
         self.optimizer.step()
         self.lr_scheduler.step()
 
@@ -261,11 +254,10 @@ class PEFMAgent(object):
         state_dict = dict(
             actor=self.actor.state_dict(),
             ema_model=self.actor.ema.averaged_model.state_dict(),
+            pc_normalizer=self.pc_normalizer.state_dict(),
             state_normalizer=self.state_normalizer.state_dict(),
             ac_normalizer=self.ac_normalizer.state_dict(),
         )
-        if self.pc_normalizer is not None:
-            state_dict["pc_normalizer"] = self.pc_normalizer.state_dict()
         torch.save(state_dict, save_path)
 
     def _fix_state_dict_keys(self, state_dict):
