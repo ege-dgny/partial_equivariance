@@ -2,7 +2,7 @@ defaults:
   - base_pefm
 
 env:
-  env_class: peg_insert
+  env_class: peg_insert_genesis
   num_eef: 1
   args:
     num_eef: 1

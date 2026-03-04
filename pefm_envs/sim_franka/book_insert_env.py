@@ -2,10 +2,11 @@
 Book-Shelf Insertion environment: SO(2) symmetry conflict.
 
 A book (flat box) spawns vertically on the table at a random yaw.
-The robot must side-grasp it, carry it to a fixed-position open-top
-holder, and lower it in.  The grasp phase has SO(2) symmetry; the
-holder placement breaks it (fixed world-frame position).
+The robot must side-grasp it, carry it to a fixed-position shelf unit,
+and place it in the upper compartment (on the 2nd of 3 horizontal shelves).
+The grasp phase has SO(2) symmetry; the shelf placement breaks it (fixed world frame).
 
+Shelf: 2 side walls + 3 horizontal shelves (2 compartments) + 1 back wall.
 Modelled after cup_pour's side-grip pattern for reliable grasping.
 """
 
@@ -22,12 +23,21 @@ class BookInsertEnv(FrankaEnv):
     BOOK_WIDTH = 0.10      # 10cm
     BOOK_THICKNESS = 0.04  # 4cm
 
-    # Open-top holder: 3 walls (left, right, back), no front/top
-    HOLDER_POS = np.array([0.35, 0.35, 0.0])
-    HOLDER_INNER_W = 0.14   # 14cm inner width (book 10cm + 4cm clearance)
-    HOLDER_DEPTH = 0.10     # 10cm depth (book 4cm + 6cm clearance)
-    HOLDER_WALL_H = 0.10    # 10cm wall height (below book top)
-    HOLDER_WALL_T = 0.01    # 1cm wall thickness
+    # Shelf unit: 2 side walls, 3 horizontal shelves (2 compartments), 1 back wall
+    HOLDER_POS = np.array([0.35, 0.35, 0.0])  # XY of shelf unit
+    HOLDER_INNER_W = 0.14   # inner width (book 10cm + clearance)
+    HOLDER_DEPTH = 0.10     # depth
+    WALL_T = 0.01           # wall/shelf thickness
+
+    # Shelf levels: 3 horizontal shelves → 2 compartments
+    # Compartment 1 (lower): shelf1 top to shelf2 top
+    # Compartment 2 (upper): shelf2 top to shelf3 top — book goes here
+    SHELF_THICKNESS = 0.01
+    SHELF1_TOP_Z = 0.05                              # first shelf top
+    COMPARTMENT1_HEIGHT = 0.08                        # gap for lower compartment
+    SHELF2_TOP_Z = SHELF1_TOP_Z + COMPARTMENT1_HEIGHT # second shelf = book placement surface
+    BOOK_CLEARANCE = 0.03                             # clearance above book in upper compartment
+    SHELF3_TOP_Z = SHELF2_TOP_Z + BOOK_LENGTH + BOOK_CLEARANCE  # third shelf top (clears book)
 
     # Book spawn
     SPAWN_RADIUS = 0.45
@@ -49,7 +59,7 @@ class BookInsertEnv(FrankaEnv):
             "roll": 0,
             "distance": 1.3,
             "fov": 45,
-            "target": [0.35, 0.15, 0.15],
+            "target": [0.35, 0.15, 0.18],  # between lower and upper compartment
         }
 
     @property
@@ -60,7 +70,7 @@ class BookInsertEnv(FrankaEnv):
             "roll": 0,
             "distance": 1.2,
             "fov": 45,
-            "target": [0.35, 0.20, 0.15],
+            "target": [0.35, 0.20, 0.18],
         }
 
     def _create_task_objects(self):
@@ -88,11 +98,11 @@ class BookInsertEnv(FrankaEnv):
         pos, _ = self.sim.getBasePositionAndOrientation(self._book_id)
         self._spawn_pos = np.array(pos)
 
-        # Target: holder center at floor + half book height
+        # Target: holder center XY, book standing on 2nd shelf
         self._target_pos = np.array([
             self.HOLDER_POS[0],
             self.HOLDER_POS[1],
-            self.BOOK_LENGTH / 2,
+            self.SHELF2_TOP_Z + self.BOOK_LENGTH / 2,
         ])
 
         # Let objects settle
@@ -183,76 +193,72 @@ class BookInsertEnv(FrankaEnv):
         return book_id
 
     def _create_holder(self):
-        """Create open-top holder: left wall, right wall, back wall.
-
-        Opening faces -Y (toward robot). No front wall, no top —
-        robot hand enters from above.
+        """Create minimal shelf: 2 side walls, 3 horizontal shelves (2 compartments), 1 back wall.
+        Book is placed in the upper compartment (on shelf 2); clearance ensures book fits.
         """
         ids = []
         cx, cy = self.HOLDER_POS[0], self.HOLDER_POS[1]
         iw = self.HOLDER_INNER_W
         d = self.HOLDER_DEPTH
-        h = self.HOLDER_WALL_H
-        t = self.HOLDER_WALL_T
+        t = self.WALL_T
+        st = self.SHELF_THICKNESS
+        s1 = self.SHELF1_TOP_Z
+        s2 = self.SHELF2_TOP_Z
+        s3 = self.SHELF3_TOP_Z
+        full_height = s3
 
-        # Left wall (-X side)
-        wall_half = [t / 2, d / 2, h / 2]
-        col = self.sim.createCollisionShape(pybullet.GEOM_BOX, halfExtents=wall_half)
-        vis = self.sim.createVisualShape(
-            pybullet.GEOM_BOX, halfExtents=wall_half,
-            rgbaColor=[0.55, 0.35, 0.2, 1.0],
+        wood = [0.55, 0.35, 0.2, 1.0]
+
+        # ---- 2 side walls (left, right): full height ----
+        wall_half = [t / 2, d / 2, full_height / 2]
+        col_w = self.sim.createCollisionShape(pybullet.GEOM_BOX, halfExtents=wall_half)
+        vis_w = self.sim.createVisualShape(
+            pybullet.GEOM_BOX, halfExtents=wall_half, rgbaColor=wood,
         )
         left_id = self.sim.createMultiBody(
             baseMass=0,
-            baseCollisionShapeIndex=col,
-            baseVisualShapeIndex=vis,
-            basePosition=[cx - iw / 2 - t / 2, cy, h / 2],
+            baseCollisionShapeIndex=col_w,
+            baseVisualShapeIndex=vis_w,
+            basePosition=[cx - iw / 2 - t / 2, cy, full_height / 2],
         )
         ids.append(left_id)
-
-        # Right wall (+X side)
-        col2 = self.sim.createCollisionShape(pybullet.GEOM_BOX, halfExtents=wall_half)
-        vis2 = self.sim.createVisualShape(
-            pybullet.GEOM_BOX, halfExtents=wall_half,
-            rgbaColor=[0.55, 0.35, 0.2, 1.0],
-        )
         right_id = self.sim.createMultiBody(
             baseMass=0,
-            baseCollisionShapeIndex=col2,
-            baseVisualShapeIndex=vis2,
-            basePosition=[cx + iw / 2 + t / 2, cy, h / 2],
+            baseCollisionShapeIndex=col_w,
+            baseVisualShapeIndex=vis_w,
+            basePosition=[cx + iw / 2 + t / 2, cy, full_height / 2],
         )
         ids.append(right_id)
 
-        # Back wall (+Y side)
-        back_half = [iw / 2 + t, t / 2, h / 2]
+        # ---- 1 back wall: full width, full height ----
+        back_half = [iw / 2 + t, t / 2, full_height / 2]
         col_b = self.sim.createCollisionShape(pybullet.GEOM_BOX, halfExtents=back_half)
         vis_b = self.sim.createVisualShape(
-            pybullet.GEOM_BOX, halfExtents=back_half,
-            rgbaColor=[0.55, 0.35, 0.2, 1.0],
+            pybullet.GEOM_BOX, halfExtents=back_half, rgbaColor=wood,
         )
         back_id = self.sim.createMultiBody(
             baseMass=0,
             baseCollisionShapeIndex=col_b,
             baseVisualShapeIndex=vis_b,
-            basePosition=[cx, cy + d / 2 + t / 2, h / 2],
+            basePosition=[cx, cy + d / 2 + t / 2, full_height / 2],
         )
         ids.append(back_id)
 
-        # Floor
-        floor_half = [iw / 2 + t, d / 2 + t, 0.005]
-        col_f = self.sim.createCollisionShape(pybullet.GEOM_BOX, halfExtents=floor_half)
-        vis_f = self.sim.createVisualShape(
-            pybullet.GEOM_BOX, halfExtents=floor_half,
-            rgbaColor=[0.6, 0.4, 0.25, 1.0],
+        # ---- 3 horizontal shelves (creating 2 compartments) ----
+        shelf_half = [iw / 2 + t, d / 2 + t, st / 2]
+        col_sh = self.sim.createCollisionShape(pybullet.GEOM_BOX, halfExtents=shelf_half)
+        vis_sh = self.sim.createVisualShape(
+            pybullet.GEOM_BOX, halfExtents=shelf_half, rgbaColor=wood,
         )
-        floor_id = self.sim.createMultiBody(
-            baseMass=0,
-            baseCollisionShapeIndex=col_f,
-            baseVisualShapeIndex=vis_f,
-            basePosition=[cx, cy, 0.005],
-        )
-        ids.append(floor_id)
+        for shelf_top_z in (s1, s2, s3):
+            center_z = shelf_top_z - st / 2
+            sid = self.sim.createMultiBody(
+                baseMass=0,
+                baseCollisionShapeIndex=col_sh,
+                baseVisualShapeIndex=vis_sh,
+                basePosition=[cx, cy, center_z],
+            )
+            ids.append(sid)
 
         return ids
 

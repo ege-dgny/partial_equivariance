@@ -25,6 +25,8 @@ pip install -e pefm_envs/
 pip install -e pefm/
 ```
 
+For **Franka tabletop tasks**, the primary backend is **Genesis** (contact-based grasping, collisions ON). Install with: `pip install genesis-world` or `pip install -e "pefm_envs[genesis]/"`. PyBullet envs (`sim_franka`) remain available; set `env.env_class=peg_insert` (etc.) to use them.
+
 Or with pip only:
 
 ```bash
@@ -44,8 +46,9 @@ pefm/                   Model, training, evaluation
   vision/               PointNet encoder
   datasets/             NPZ episode loader
   configs/              Hydra YAML configs per task
-pefm_envs/              PyBullet simulation environments
-  sim_franka/           Single Franka Panda tabletop tasks (primary)
+pefm_envs/              Simulation environments
+  sim_genesis/          Genesis Franka tabletop (primary; contact-based grasping)
+  sim_franka/           PyBullet Franka tabletop (fallback)
   sim_mobile/           Dual Kinova mobile-base tasks (legacy)
 ```
 
@@ -55,44 +58,38 @@ All commands run from this directory (`Partial_Equivariance/`).
 
 ### Generate demonstrations
 
+Franka demos use **Genesis** (contact-based grasping). From `Partial_Equivariance/`:
+
 ```bash
-# Pick-and-Place (SO2 conflict: symmetric grasp, fixed-position tray)
-python -m pefm_envs.sim_franka.generate_demos \
-    --task_name pick_place --num_demos 50 --data_out_dir ../data/pick_place \
-    --randomize_rotation
-
-# Peg Insertion (C4 conflict: C4 peg, fixed-orientation socket)
-python -m pefm_envs.sim_franka.generate_demos \
-    --task_name peg_insert --num_demos 50 --data_out_dir ../data/peg_insert \
-    --randomize_rotation
-
-# Centering (SO2 fully symmetric control — no conflict, entropy stays maximal)
-python -m pefm_envs.sim_franka.generate_demos \
-    --task_name centering --num_demos 50 --data_out_dir ../data/centering \
-    --randomize_rotation
+python -m pefm_envs.sim_genesis.generate_demos \
+    --task_name peg_insert --num_demos 50 --data_out_dir ../data/peg_insert --randomize_rotation
+python -m pefm_envs.sim_genesis.generate_demos \
+    --task_name cup_pour --num_demos 50 --data_out_dir ../data/cup_pour --randomize_rotation
+python -m pefm_envs.sim_genesis.generate_demos \
+    --task_name book_insert --num_demos 50 --data_out_dir ../data/book_insert --randomize_rotation
 ```
 
-Videos are recorded with 2 views (front + side) stitched side-by-side.
+Videos: 2 views (front + side). Configs default to `*_genesis` envs.
 
 ### Train
 
 ```bash
-python -m pefm.train --config-name pick_place_pefm \
-    prefix=pick_place_v1 \
-    data.dataset.path=../data/pick_place/pcs \
+python -m pefm.train --config-name peg_insert_pefm \
+    prefix=peg_insert_v1 \
+    data.dataset.path=../data/peg_insert/pcs \
     use_wandb=false
 ```
 
-Available configs: `pick_place_pefm`, `peg_insert_pefm`, `centering_pefm`.
+Available configs: `peg_insert_pefm`, `cup_pour_pefm`, `book_insert_pefm`, `push_t_gym_pefm`.
 
 To log to W&B: replace `use_wandb=false` with `wandb.entity=<entity> wandb.project=<project>`.
 
 ### Evaluate
 
 ```bash
-python -m pefm.eval --config-name pick_place_pefm \
-    prefix=eval_pick_place_v1 mode=eval \
-    training.ckpt="logs/train/pick_place_v1/ckpt01999.pth" \
+python -m pefm.eval --config-name peg_insert_pefm \
+    prefix=eval_peg_insert_v1 mode=eval \
+    training.ckpt="logs/train/peg_insert_v1/ckpt01999.pth" \
     env.vectorize=true
 ```
 
@@ -111,36 +108,31 @@ python -m pefm.eval --config-name pick_place_pefm \
 
 | Task | Group | Distribution | Symmetry conflict |
 |---|---|---|---|
-| Pick-and-Place | SO(2) | ProjectedNormal | SO(2) cylinder grasp vs fixed-position tray |
 | Peg Insertion | C4 | GumbelSoftmax | C4 peg grasp vs fixed-orientation keyed socket |
-| Centering | SO(2) | ProjectedNormal | Fully symmetric control (no conflict) |
+| Cup Pour | SO(2) | ProjectedNormal | Grasp vs gravity-fixed pour |
+| Book Insert | — | — | Side-grasp book to shelf |
 
 ## Robot
 
-Single **Franka Panda** 7-DOF arm, fixed to table at origin. Uses PyBullet's built-in URDF from `pybullet_data`. Action space: `[gripper, vx, vy, vz, drx, dry, drz]`. Observation: `[eef_xyz, x_dir, z_dir, gravity, grip]` (13-dim).
-
-This matches the lab's real Franka Panda setup for sim-to-real transfer.
+Single **Franka Panda** 7-DOF arm. **Primary backend: Genesis** (contact-based grasping, collisions ON). Action: `[gripper, vx, vy, vz, drx, dry, drz]`. Obs: `[eef_xyz, x_dir, z_dir, gravity, grip]` (13-dim). PyBullet (`sim_franka`) available as fallback.
 
 ## Task Status
 
 | Task | Status | Notes |
 |------|--------|-------|
-| pick_place | Working | Reward threshold 0.9, reliable demos |
-| centering | Partial | Works with threshold 0.5, some drift |
-| peg_insert | Failing | Needs wrist rotation, collision issues |
+| peg_insert | Genesis | Contact-based; config uses `peg_insert_genesis` |
+| cup_pour | Genesis | Contact-based |
+| book_insert | Genesis | Contact-based |
 
 ## Real-Time Visualization
 
 Watch demo generation live with the `--vis` flag:
 
 ```bash
-python -m pefm_envs.sim_franka.generate_demos --task pick_place --num_demos 1 --vis
+python -m pefm_envs.sim_genesis.generate_demos --task_name peg_insert --num_demos 1 --vis
 ```
 
 ## Known Issues
 
-- **IK offset**: `panda_hand` EE link has ~4cm Z offset from fingertip
-- **Constraint drift**: Grasped objects may drift during fast movements
-- **peg_insert**: Needs wrist rotation control and collision-free approach
-
-See [docs/FRANKA_ENV.md](docs/FRANKA_ENV.md) for detailed troubleshooting.
+- **Genesis**: Requires `genesis-world`; GPU backend preferred. Render/point-cloud may need camera sensor integration for full demo quality.
+- **PyBullet**: See [docs/FRANKA_ENV.md](docs/FRANKA_ENV.md) (IK offset, constraint drift) when using `env.env_class=peg_insert` etc.

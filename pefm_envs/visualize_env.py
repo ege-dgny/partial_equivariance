@@ -7,7 +7,8 @@ Usage (run from Partial_Equivariance/ after `pip install -e pefm_envs/`):
   python -m pefm_envs.visualize_env --suite franka --task peg_insert --vis
 
   # Franka (no GUI, render frames with OpenCV)
-  python -m pefm_envs.visualize_env --suite franka --task pick_place --render
+  # Franka (no GUI, render frames with OpenCV)
+  python -m pefm_envs.visualize_env --suite franka --task peg_insert --render
 
   # Mobile (always DIRECT; render frames with OpenCV)
   python -m pefm_envs.visualize_env --suite mobile --task pour --render
@@ -27,18 +28,14 @@ import numpy as np
 
 
 def _get_franka_env_class(task: str):
-    from pefm_envs.sim_franka.centering_env import CenteringEnv
-    from pefm_envs.sim_franka.orient_place_env import OrientPlaceEnv
     from pefm_envs.sim_franka.peg_insert_env import PegInsertEnv
-    from pefm_envs.sim_franka.pick_place_env import PickPlaceEnv
-    from pefm_envs.sim_franka.stack_env import StackEnv
+    from pefm_envs.sim_franka.cup_pour_env import CupPourEnv
+    from pefm_envs.sim_franka.book_insert_env import BookInsertEnv
 
     table: Dict[str, Type] = {
-        "pick_place": PickPlaceEnv,
         "peg_insert": PegInsertEnv,
-        "centering": CenteringEnv,
-        "orient_place": OrientPlaceEnv,
-        "stack": StackEnv,
+        "cup_pour": CupPourEnv,
+        "book_insert": BookInsertEnv,
     }
     if task not in table:
         raise ValueError(f"Unknown franka task '{task}'. Choices: {sorted(table)}")

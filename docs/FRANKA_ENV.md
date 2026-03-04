@@ -245,22 +245,23 @@ def split_and_rotate_sketch(sketch, object_phases, object_rotation):
     return rotated
 ```
 
-### Example: pick_place Sketch
+### Example: peg_insert Sketch
 
 ```python
-# Object spawns at angle θ on arc radius 0.5m from arm
-# Tray is at FIXED position [0.35, 0.25, 0]
+# Peg spawns at angle θ; socket at FIXED position
+# Object-relative phases: approach, descend, grasp, lift
+# World-frame phases: move over socket, insert
 
-object_phases = {1, 2, 3, 4}  # Phases that rotate with object
+object_phases = {1, 2, 3, 4}
 
 sketch = [
-    (0, 0.35, 0.0, 0.30),   # Phase 0: World-frame - safe height near home
-    (0, 0.0, 0.0, 0.30),    # Phase 1: Object-relative - above object
+    (0, 0.35, 0.0, 0.30),   # Phase 0: World-frame - safe height
+    (0, 0.0, 0.0, 0.30),    # Phase 1: Object-relative - above peg
     (0, 0.0, 0.0, 0.08),    # Phase 2: Object-relative - descend
     (1, 0.0, 0.0, 0.04),    # Phase 3: Object-relative - grasp
     (1, 0.0, 0.0, 0.25),    # Phase 4: Object-relative - lift
-    (1, 0.35, 0.25, 0.25),  # Phase 5: World-frame - over tray
-    (0, 0.35, 0.25, 0.02),  # Phase 6: World-frame - place
+    (1, 0.35, -0.2, 0.25),  # Phase 5: World-frame - over socket
+    (0, 0.35, -0.2, 0.02),  # Phase 6: World-frame - insert
 ]
 ```
 
@@ -399,9 +400,9 @@ The peg insertion task currently fails. Here are the specific issues:
 | File | Description |
 |------|-------------|
 | `pefm_envs/sim_franka/franka_env.py` | Base environment class |
-| `pefm_envs/sim_franka/pick_place_env.py` | Pick-and-place task (SO2) |
 | `pefm_envs/sim_franka/peg_insert_env.py` | Peg insertion task (C4) |
-| `pefm_envs/sim_franka/centering_env.py` | Centering task (SO2 control) |
+| `pefm_envs/sim_franka/cup_pour_env.py` | Cup pouring task |
+| `pefm_envs/sim_franka/book_insert_env.py` | Book to shelf task |
 | `pefm_envs/sim_franka/generate_demos.py` | Demo generation script |
 | `pefm_envs/sim_mobile/utils/info.py` | Robot configuration (FRANKA_HOME_QPOS) |
 | `pefm_envs/sim_mobile/utils/bullet_robot.py` | BulletRobot class for IK, control |

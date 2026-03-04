@@ -48,24 +48,24 @@ def get_env_class(env_name):
         from pefm_envs.sim_mobile.compass_closing_env import CompassClosingEnv
         return CompassClosingEnv
     # Franka single-arm tasks
-    elif env_name == "pick_place":
-        from pefm_envs.sim_franka.pick_place_env import PickPlaceEnv
-        return PickPlaceEnv
     elif env_name == "peg_insert":
         from pefm_envs.sim_franka.peg_insert_env import PegInsertEnv
         return PegInsertEnv
-    elif env_name == "centering":
-        from pefm_envs.sim_franka.centering_env import CenteringEnv
-        return CenteringEnv
+    elif env_name == "peg_insert_genesis":
+        from pefm_envs.sim_genesis.peg_insert_env import GenesisPegInsertEnv
+        return GenesisPegInsertEnv
     elif env_name == "book_insert":
         from pefm_envs.sim_franka.book_insert_env import BookInsertEnv
         return BookInsertEnv
+    elif env_name == "book_insert_genesis":
+        from pefm_envs.sim_genesis.book_insert_env import GenesisBookInsertEnv
+        return GenesisBookInsertEnv
     elif env_name == "cup_pour":
         from pefm_envs.sim_franka.cup_pour_env import CupPourEnv
         return CupPourEnv
-    elif env_name == "push_t":
-        from pefm_envs.sim_franka.push_t_env import PushTEnv
-        return PushTEnv
+    elif env_name == "cup_pour_genesis":
+        from pefm_envs.sim_genesis.cup_pour_env import GenesisCupPourEnv
+        return GenesisCupPourEnv
     elif env_name == "push_t_gym":
         from pefm_envs.gym_pusht.pusht_wrapper import GymPushTEnv
         return GymPushTEnv

@@ -18,4 +18,7 @@ setup(
         "opencv-python",
         "tqdm",
     ],
+    extras_require={
+        "genesis": ["genesis-world"],
+    },
 )

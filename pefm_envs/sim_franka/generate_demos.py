@@ -10,16 +10,30 @@ Records 2-camera views (front + side) stitched side-by-side.
 
 import os
 import sys
-import cv2
 import re
 import logging
 import argparse
 import numpy as np
-import pybullet
+
+# Guard heavy imports so Genesis demo gen can import pure-math helpers
+# without requiring PyBullet or OpenCV
+try:
+    import cv2
+except ImportError:
+    cv2 = None
+
+try:
+    import pybullet
+except ImportError:
+    pybullet = None
 
 from pefm_envs.sim_mobile.utils.anchors import create_trajectory
 from pefm_envs.sim_mobile.utils.init_utils import rotate_around_z
-from pefm_envs.sim_mobile.utils.multi_camera import MultiCamera
+
+try:
+    from pefm_envs.sim_mobile.utils.multi_camera import MultiCamera
+except ImportError:
+    MultiCamera = None
 
 np.set_printoptions(precision=2, linewidth=150, threshold=10000, suppress=True)
 
@@ -57,36 +71,15 @@ def quat_error_axis_angle(q_current, q_target):
 # ------------------------------------------------------------------ #
 
 def get_env_class(task_name):
-    if task_name == "pick_place":
-        from .pick_place_env import PickPlaceEnv
-        return PickPlaceEnv
-    elif task_name == "peg_insert":
+    if task_name == "peg_insert":
         from .peg_insert_env import PegInsertEnv
         return PegInsertEnv
-    elif task_name == "centering":
-        from .centering_env import CenteringEnv
-        return CenteringEnv
-    elif task_name == "orient_place":
-        from .orient_place_env import OrientPlaceEnv
-        return OrientPlaceEnv
-    elif task_name == "stack":
-        from .stack_env import StackEnv
-        return StackEnv
-    elif task_name == "position_insert":
-        from .position_insert_env import PositionInsertEnv
-        return PositionInsertEnv
-    elif task_name == "cup_upright":
-        from .cup_upright_env import CupUprightEnv
-        return CupUprightEnv
     elif task_name == "cup_pour":
         from .cup_pour_env import CupPourEnv
         return CupPourEnv
     elif task_name == "book_insert":
         from .book_insert_env import BookInsertEnv
         return BookInsertEnv
-    elif task_name == "push_t":
-        from .push_t_env import PushTEnv
-        return PushTEnv
     else:
         raise ValueError(f"Unknown task: {task_name}")
 
@@ -291,6 +284,9 @@ def split_and_rotate_sketch_7d(sketch, object_phases, ang, object_center=None):
 def save_video(frames, path, fps=10):
     if len(frames) == 0:
         return
+    if cv2 is None:
+        print(f"Warning: cv2 not available, skipping video save to {path}")
+        return
     h, w = frames[0].shape[:2]
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
     writer = cv2.VideoWriter(path, fourcc, fps, (w, h))
@@ -324,38 +320,11 @@ def run_demo(args, counter=0):
     # For C4 tasks, we need both spawn position angle AND object C4 rotation
     if args.task_name == "peg_insert":
         ang = env._object_rotation[-1] + getattr(env, '_peg_spawn_rotation', 0.0)
-    elif args.task_name == "stack":
-        ang = env._object_rotation[-1] + getattr(env, '_block_spawn_rotation', 0.0)
     else:
         ang = env._object_rotation[-1]
 
     # Build sketch based on task
-    if args.task_name == "pick_place":
-        cyl_pos, _ = env.sim.getBasePositionAndOrientation(env._cylinder_id)
-        cx, cy = cyl_pos[0], cyl_pos[1]
-        ch = env.CYLINDER_HEIGHT
-        tray_x, tray_y = env.TRAY_POS[0], env.TRAY_POS[1]
-        tray_z = env.TRAY_SIZE[2]
-
-        sketch = [
-            # Phase 0 (object-relative): approach above cylinder
-            (0, 0.0, 0.0, ch * 2.5),
-            # Phase 1 (object-relative): descend to grasp
-            (1, 0.0, 0.0, ch * 0.7),
-            # Phase 2 (object-relative): lift
-            (1, 0.0, 0.0, ch * 3.0),
-            # Phase 3 (world-frame): move over tray
-            (1, tray_x, tray_y, ch * 3.0),
-            # Phase 4 (world-frame): lower onto tray and release
-            (0, tray_x, tray_y, tray_z + ch * 0.6),
-        ]
-        object_phases = {0, 1, 2}
-        sketch = split_and_rotate_sketch(
-            sketch, object_phases, ang,
-            object_center=np.array([cx, cy]),
-        )
-
-    elif args.task_name == "peg_insert":
+    if args.task_name == "peg_insert":
         peg_pos, _ = env.sim.getBasePositionAndOrientation(env._peg_id)
         px, py = peg_pos[0], peg_pos[1]
         peg_h = env.PEG_HEIGHT
@@ -393,149 +362,6 @@ def run_demo(args, counter=0):
         sketch = split_and_rotate_sketch_7d(
             sketch, object_phases, ang,
             object_center=np.array([px, py]),
-        )
-
-    elif args.task_name == "centering":
-        cyl_pos, _ = env.sim.getBasePositionAndOrientation(env._cylinder_id)
-        cx, cy = cyl_pos[0], cyl_pos[1]
-        ch = env.CYLINDER_HEIGHT
-        lift_h = env.LIFT_HEIGHT
-
-        sketch = [
-            # Phase 0 (object-relative): approach above cylinder
-            (0, 0.0, 0.0, ch * 2.5),
-            # Phase 1 (object-relative): descend to grasp
-            (1, 0.0, 0.0, ch * 1.2),
-            # Phase 2 (object-relative): lift
-            (1, 0.0, 0.0, lift_h),
-            # Phase 3 (object-relative): lower back to spawn
-            (1, 0.0, 0.0, ch * 0.8),
-            # Phase 4 (object-relative): release
-            (0, 0.0, 0.0, ch * 0.8),
-        ]
-        # All phases object-relative (fully symmetric task)
-        object_phases = {0, 1, 2, 3, 4}
-        sketch = split_and_rotate_sketch(
-            sketch, object_phases, ang,
-            object_center=np.array([cx, cy]),
-        )
-
-    elif args.task_name == "orient_place":
-        cyl_pos, _ = env.sim.getBasePositionAndOrientation(env._cylinder_id)
-        cx, cy = cyl_pos[0], cyl_pos[1]
-        ch = env.CYLINDER_HEIGHT
-        target_x, target_y = env.TARGET_POS[0], env.TARGET_POS[1]
-
-        sketch = [
-            # Phase 0 (object-relative): approach above cylinder
-            (0, 0.0, 0.0, ch * 2.5),
-            # Phase 1 (object-relative): descend to grasp
-            (1, 0.0, 0.0, ch * 0.7),
-            # Phase 2 (object-relative): lift
-            (1, 0.0, 0.0, ch * 3.0),
-            # Phase 3 (world-frame): move over target
-            (1, target_x, target_y, ch * 3.0),
-            # Phase 4 (world-frame): lower onto target and release
-            (0, target_x, target_y, ch * 0.6),
-        ]
-        # Phases 0-2 are object-relative, 3-4 are world-frame
-        object_phases = {0, 1, 2}
-        sketch = split_and_rotate_sketch(
-            sketch, object_phases, ang,
-            object_center=np.array([cx, cy]),
-        )
-
-    elif args.task_name == "stack":
-        block_pos, _ = env.sim.getBasePositionAndOrientation(env._block_id)
-        bx, by = block_pos[0], block_pos[1]
-        bh = env.BLOCK_HEIGHT
-        base_x, base_y = env.BASE_POS[0], env.BASE_POS[1]
-        base_z = env.BASE_SIZE[2]
-        safe_z = 0.25  # Safe height for lateral moves
-
-        sketch = [
-            # Phase 0 (object-relative): approach above block
-            (0, 0.0, 0.0, bh * 3.0),
-            # Phase 1 (object-relative): descend to grasp
-            (1, 0.0, 0.0, bh * 0.6),
-            # Phase 2 (object-relative): lift
-            (1, 0.0, 0.0, safe_z),
-            # Phase 3 (world-frame): move over base
-            (1, base_x, base_y, safe_z),
-            # Phase 4 (world-frame): lower onto base
-            (1, base_x, base_y, base_z + bh * 0.6),
-            # Phase 5 (world-frame): release
-            (0, base_x, base_y, base_z + bh * 0.8),
-        ]
-        # Phases 0-2 are object-relative, 3-5 are world-frame
-        object_phases = {0, 1, 2}
-        sketch = split_and_rotate_sketch(
-            sketch, object_phases, ang,
-            object_center=np.array([bx, by]),
-        )
-
-    elif args.task_name == "position_insert":
-        # Position-variable insertion: cylindrical peg at random XY → fixed socket
-        peg_pos, _ = env.sim.getBasePositionAndOrientation(env._peg_id)
-        px, py = peg_pos[0], peg_pos[1]
-        peg_h = env.PEG_HEIGHT
-        sx, sy = env.SOCKET_POS[0], env.SOCKET_POS[1]
-        safe_z = 0.25
-
-        sketch = [
-            # Phases 0-3: object-relative (grasp)
-            (0, 0.0, 0.0, safe_z),
-            (0, 0.0, 0.0, peg_h * 0.7),
-            (1, 0.0, 0.0, peg_h * 0.7),
-            (1, 0.0, 0.0, safe_z),
-            # Phases 4-6: WORLD-FRAME (fixed target position)
-            (1, sx, sy, safe_z),
-            (1, sx, sy, 0.02),
-            (0, sx, sy, 0.04),
-        ]
-        object_phases = {0, 1, 2, 3}
-        sketch = split_and_rotate_sketch(
-            sketch, object_phases, ang,
-            object_center=np.array([px, py]),
-        )
-
-    elif args.task_name == "cup_upright":
-        # Gravity-sensitive placement: cup with tilt → place upright
-        # This uses 7-dim waypoints with orientation control
-        cup_pos, cup_quat = env.sim.getBasePositionAndOrientation(env._cup_id)
-        cx, cy = cup_pos[0], cup_pos[1]
-        cup_h = env.CUP_HEIGHT
-        init_roll = env._initial_roll
-        init_pitch = env._initial_pitch
-        target_x, target_y = env.TARGET_POS[0], env.TARGET_POS[1]
-        safe_z = 0.25
-
-        # 7-dim waypoints: (grip, x, y, z, roll, pitch, yaw)
-        # EEF default: gripper pointing down = roll=pi, pitch=0, yaw=0
-        sketch = [
-            # Phase 0 (object-relative): approach above cup with vertical EEF
-            (0, 0.0, 0.0, safe_z, np.pi, 0.0, 0.0),
-            # Phase 1 (object-relative): descend toward cup
-            (0, 0.0, 0.0, cup_h * 1.5, np.pi, 0.0, 0.0),
-            # Phase 2 (object-relative): tilt EEF to match cup orientation
-            (0, 0.0, 0.0, cup_h * 0.8, np.pi + init_roll, init_pitch, 0.0),
-            # Phase 3 (object-relative): grasp
-            (1, 0.0, 0.0, cup_h * 0.6, np.pi + init_roll, init_pitch, 0.0),
-            # Phase 4 (object-relative): lift + correct tilt back to vertical
-            # This is the KEY phase where world-frame (gravity) constraint applies!
-            (1, 0.0, 0.0, safe_z, np.pi, 0.0, 0.0),
-            # Phase 5 (world-frame): move to target position
-            (1, target_x, target_y, safe_z, np.pi, 0.0, 0.0),
-            # Phase 6 (world-frame): lower to place height
-            (1, target_x, target_y, cup_h * 0.6, np.pi, 0.0, 0.0),
-            # Phase 7 (world-frame): release upright
-            (0, target_x, target_y, cup_h * 0.8, np.pi, 0.0, 0.0),
-        ]
-        # Phases 0-4 are object-relative, 5-7 are world-frame
-        object_phases = {0, 1, 2, 3, 4}
-        sketch = split_and_rotate_sketch_7d(
-            sketch, object_phases, ang,
-            object_center=np.array([cx, cy]),
         )
 
     elif args.task_name == "cup_pour":
@@ -611,11 +437,12 @@ def run_demo(args, counter=0):
         )
 
     elif args.task_name == "book_insert":
-        # Side-grasp book, carry to holder, lower in (cup_pour pattern)
+        # Side-grasp book, carry to 2nd shelf, lower into slot (cup_pour pattern)
         book_pos, _ = env.sim.getBasePositionAndOrientation(env._book_id)
         bx, by = book_pos[0], book_pos[1]
         bl = env.BOOK_LENGTH   # 0.15 — height when standing
         hx, hy = env.HOLDER_POS[0], env.HOLDER_POS[1]
+        shelf2_z = env.SHELF2_TOP_Z   # top of 2nd shelf
         safe_z = 0.30
 
         # Side-grip orientation (same as cup_pour):
@@ -627,9 +454,9 @@ def run_demo(args, counter=0):
         grasp_z = bl * 0.5
         approach_offset = 0.08
 
-        # World-frame EEF offset: at yaw=0, book center is ~12cm in +Y
-        # from panda_hand due to finger-midpoint snap + CoM/URDF IK chain.
-        # Same pattern as cup_pour's pour_y offset.
+        # Place on 2nd shelf: book center at shelf2_z + half book height
+        place_z = shelf2_z + bl / 2 + 0.02   # slight margin above shelf for release
+        # World-frame EEF offset: at yaw=0, book center is ~12cm in +Y from panda_hand
         place_y = hy - 0.12
 
         # 7-dim waypoints: (grip, x, y, z, roll, pitch, yaw)
@@ -653,14 +480,14 @@ def run_demo(args, counter=0):
             # Phase 6 (object-relative): lift
             (1, 0.0, 0.0, safe_z,
              side_roll, side_pitch, 0.0),
-            # Phase 7 (world-frame): move above holder (offset for EEF chain)
+            # Phase 7 (world-frame): move above 2nd shelf slot (offset for EEF chain)
             (1, hx, place_y, safe_z,
              side_roll, side_pitch, 0.0),
-            # Phase 8 (world-frame): lower into holder
-            (1, hx, place_y, bl * 0.55,
+            # Phase 8 (world-frame): lower into slot on 2nd shelf
+            (1, hx, place_y, place_z,
              side_roll, side_pitch, 0.0),
             # Phase 9 (world-frame): release
-            (0, hx, place_y, bl * 0.55,
+            (0, hx, place_y, place_z,
              side_roll, side_pitch, 0.0),
         ]
         object_phases = {0, 1, 2, 3, 4, 5, 6}
@@ -668,9 +495,6 @@ def run_demo(args, counter=0):
             sketch, object_phases, ang,
             object_center=np.array([bx, by]),
         )
-
-    elif args.task_name == "push_t":
-        sketch = None  # Push-T uses reactive policy below
 
     else:
         raise ValueError(f"Unknown task: {args.task_name}")
@@ -686,239 +510,131 @@ def run_demo(args, counter=0):
     imgs = []
     sim_unstable = False
 
-    if args.task_name == "push_t":
-        # ---- Reactive Push-T policy ----
-        max_steps = args.max_episode_length * sim_freq
-        approach_dist = 0.06   # How far behind block to approach
-        push_speed = 0.3       # Push velocity magnitude
+    # ---- Sketch-based execution ----
+    # Check if this is a 7-dim sketch (with orientation)
+    use_orientation = is_7dim_sketch(sketch)
 
-        for t in range(max_steps):
+    # Get initial EEF orientation if needed
+    if use_orientation:
+        ee_pos, ee_quat, _, _ = env.robot.get_ee_pos_quat_vel()
+        init_eef_euler = np.array(pybullet.getEulerFromQuaternion(ee_quat))
+    else:
+        init_eef_euler = np.array([np.pi, 0.0, 0.0])  # Default: gripper pointing down
+
+    curr_euler = init_eef_euler.copy()
+
+    for step_idx, step_target in enumerate(sketch):
+        if sim_unstable:
+            break
+
+        if use_orientation:
+            # 7-dim waypoint: (grip, x, y, z, roll, pitch, yaw)
+            grip = step_target[0]
+            tx, ty, tz = step_target[1:4]
+            target_euler = np.array(step_target[4:7])
+            prev_grip = init_grip if step_idx == 0 else sketch[step_idx - 1][0]
+
+            step_actions = plan_actions_with_orientation(
+                obs[0, :3], curr_euler, [(grip, tx, ty, tz, *target_euler)],
+                sim_freq, num_sec_per_unit=num_sec_per_unit, init_grip=prev_grip,
+            )
+            # Update current euler for next waypoint
+            curr_euler = target_euler.copy()
+        else:
+            # 4-dim waypoint: (grip, x, y, z)
+            grip, tx, ty, tz = step_target
+            prev_grip = init_grip if step_idx == 0 else sketch[step_idx - 1][0]
+
+            step_actions = plan_actions_from_sketch(
+                obs[0], [(grip, tx, ty, tz)], prev_grip, sim_freq,
+                num_sec_per_unit=num_sec_per_unit,
+            )
+
+        for step_t, action_raw in enumerate(step_actions):
             if sim_unstable:
                 break
 
-            block_pos, block_yaw = env.get_block_pose()
-            target_pos_2d = env.TARGET_POS
-            eef_pos = obs[0, :3]
+            # Convert absolute targets to velocities
+            grip_ac = action_raw[0]
+            target_pos = action_raw[1:4]
+            eef_vel = (target_pos - obs[0, :3]) * env.freq
+            eef_vel = np.clip(eef_vel, -1.0, 1.0)
 
-            # Compute desired push direction
-            pos_error = target_pos_2d - block_pos[:2]
-            pos_dist = np.linalg.norm(pos_error)
-            if pos_dist < 0.005:
-                push_dir = np.array([0.0, 0.0])
+            if use_orientation and len(action_raw) >= 7:
+                ee_pos, ee_quat, _, _ = env.robot.get_ee_pos_quat_vel()
+                target_euler = action_raw[4:7]
+                target_quat = pybullet.getQuaternionFromEuler(
+                    target_euler.tolist()
+                )
+                axis_angle_err = quat_error_axis_angle(ee_quat, target_quat)
+                ori_vel = axis_angle_err * env.freq
+                ori_vel = np.clip(ori_vel, -1.0, 1.0)
+                action = np.array([grip_ac, *eef_vel, *ori_vel])
             else:
-                push_dir = pos_error / pos_dist
-
-            # Approach point: behind the block opposite to push direction
-            approach_pt = block_pos[:2] - push_dir * approach_dist
-            eef_to_approach = approach_pt - eef_pos[:2]
-            eef_to_approach_dist = np.linalg.norm(eef_to_approach)
-
-            # State machine: approach if far, push if close
-            if eef_to_approach_dist > 0.02:
-                # Move to approach point (no contact)
-                vel_2d = eef_to_approach / max(eef_to_approach_dist, 1e-6) * min(push_speed, eef_to_approach_dist * sim_freq)
-            else:
-                # Push through block toward target
-                vel_2d = push_dir * push_speed
-
-            vel_2d = np.clip(vel_2d, -1.0, 1.0)
-            action = np.array([1.0, vel_2d[0], vel_2d[1], 0.0, 0.0, 0.0, 0.0])
+                action = np.array([grip_ac, *eef_vel, 0.0, 0.0, 0.0])
 
             # Record
             should_record = (
                 t % args.cam_rec_interval == 0
                 if args.cam_rec_interval > 0
-                else t == 0
+                else (step_t == len(step_actions) - 1 or
+                      (step_idx == 0 and step_t == 0))
             )
             if should_record:
+                # Render point cloud from front camera
                 front_cam = env.default_front_camera.copy()
                 render_dict = env.render(
                     cam_config=front_cam,
-                    return_depth=True, return_pc=True,
-                    return_seg=True, resolution=240,
+                    return_depth=True,
+                    return_pc=True,
+                    return_seg=True,
+                    resolution=240,
                 )
+
                 pc = render_dict["pc"]
                 img = render_dict["images"][0][..., :3]
 
                 if len(pc) == 0:
                     sim_unstable = True
-                    break
-                if np.min(pc[:, 2]) < -0.05 or np.max(pc[:, 2]) > 1.0:
-                    sim_unstable = True
+                    print("Warning: no point cloud; cutting episode short.")
                     break
 
+                if np.min(pc[:, 2]) < -0.05 or np.max(pc[:, 2]) > 1.0:
+                    sim_unstable = True
+                    print("Warning: simulation unstable; cutting episode.")
+                    break
+
+                # Subsample point cloud
                 num_points = 4096
                 if len(pc) >= num_points:
                     idx = np.random.choice(len(pc), size=num_points, replace=False)
                     pc = pc[idx]
 
                 img_name = f"{prefix}_ep{counter:06d}_view0_t{record_t:02d}"
-                save_path = os.path.join(args.data_out_dir, "pcs", f"{img_name}.npz")
-                np.savez(save_path, pc=pc, rgb=img, action=action, eef_pos=obs)
+                save_path = os.path.join(
+                    args.data_out_dir, "pcs", f"{img_name}.npz"
+                )
+                np.savez(
+                    save_path, pc=pc, rgb=img, action=action, eef_pos=obs,
+                )
                 saved_files.append(save_path)
 
+                # Record dual-view frame for video
                 dual_frame = env.render_dual(resolution=240)
                 imgs.append(dual_frame)
+
                 record_t += 1
 
             obs, _, _, _ = env.step(action, dummy_reward=True)
-
-            # Early termination if block is at target
-            if env.compute_reward() >= 0.95:
-                break
-
-    else:
-        # ---- Sketch-based execution (all other tasks) ----
-        # Check if this is a 7-dim sketch (with orientation)
-        use_orientation = is_7dim_sketch(sketch)
-
-        # Get initial EEF orientation if needed
-        if use_orientation:
-            ee_pos, ee_quat, _, _ = env.robot.get_ee_pos_quat_vel()
-            init_eef_euler = np.array(pybullet.getEulerFromQuaternion(ee_quat))
-        else:
-            init_eef_euler = np.array([np.pi, 0.0, 0.0])  # Default: gripper pointing down
-
-        curr_euler = init_eef_euler.copy()
-
-        for step_idx, step_target in enumerate(sketch):
-            if sim_unstable:
-                break
-
-            if use_orientation:
-                # 7-dim waypoint: (grip, x, y, z, roll, pitch, yaw)
-                grip = step_target[0]
-                tx, ty, tz = step_target[1:4]
-                target_euler = np.array(step_target[4:7])
-                prev_grip = init_grip if step_idx == 0 else sketch[step_idx - 1][0]
-
-                step_actions = plan_actions_with_orientation(
-                    obs[0, :3], curr_euler, [(grip, tx, ty, tz, *target_euler)],
-                    sim_freq, num_sec_per_unit=num_sec_per_unit, init_grip=prev_grip,
-                )
-                # Update current euler for next waypoint
-                curr_euler = target_euler.copy()
-            else:
-                # 4-dim waypoint: (grip, x, y, z)
-                grip, tx, ty, tz = step_target
-                prev_grip = init_grip if step_idx == 0 else sketch[step_idx - 1][0]
-
-                step_actions = plan_actions_from_sketch(
-                    obs[0], [(grip, tx, ty, tz)], prev_grip, sim_freq,
-                    num_sec_per_unit=num_sec_per_unit,
-                )
-
-            for step_t, action_raw in enumerate(step_actions):
-                if sim_unstable:
-                    break
-
-                # Convert absolute targets to velocities
-                grip_ac = action_raw[0]
-                target_pos = action_raw[1:4]
-                eef_vel = (target_pos - obs[0, :3]) * env.freq
-                eef_vel = np.clip(eef_vel, -1.0, 1.0)
-
-                if use_orientation and len(action_raw) >= 7:
-                    ee_pos, ee_quat, _, _ = env.robot.get_ee_pos_quat_vel()
-                    target_euler = action_raw[4:7]
-                    target_quat = pybullet.getQuaternionFromEuler(
-                        target_euler.tolist()
-                    )
-                    axis_angle_err = quat_error_axis_angle(ee_quat, target_quat)
-                    ori_vel = axis_angle_err * env.freq
-                    ori_vel = np.clip(ori_vel, -1.0, 1.0)
-                    action = np.array([grip_ac, *eef_vel, *ori_vel])
-                else:
-                    action = np.array([grip_ac, *eef_vel, 0.0, 0.0, 0.0])
-
-                # Record
-                should_record = (
-                    t % args.cam_rec_interval == 0
-                    if args.cam_rec_interval > 0
-                    else (step_t == len(step_actions) - 1 or
-                          (step_idx == 0 and step_t == 0))
-                )
-                if should_record:
-                    # Render point cloud from front camera
-                    front_cam = env.default_front_camera.copy()
-                    render_dict = env.render(
-                        cam_config=front_cam,
-                        return_depth=True,
-                        return_pc=True,
-                        return_seg=True,
-                        resolution=240,
-                    )
-
-                    pc = render_dict["pc"]
-                    img = render_dict["images"][0][..., :3]
-
-                    if len(pc) == 0:
-                        sim_unstable = True
-                        print("Warning: no point cloud; cutting episode short.")
-                        break
-
-                    if np.min(pc[:, 2]) < -0.05 or np.max(pc[:, 2]) > 1.0:
-                        sim_unstable = True
-                        print("Warning: simulation unstable; cutting episode.")
-                        break
-
-                    # Subsample point cloud
-                    num_points = 4096
-                    if len(pc) >= num_points:
-                        idx = np.random.choice(len(pc), size=num_points, replace=False)
-                        pc = pc[idx]
-
-                    img_name = f"{prefix}_ep{counter:06d}_view0_t{record_t:02d}"
-                    save_path = os.path.join(
-                        args.data_out_dir, "pcs", f"{img_name}.npz"
-                    )
-                    np.savez(
-                        save_path, pc=pc, rgb=img, action=action, eef_pos=obs,
-                    )
-                    saved_files.append(save_path)
-
-                    # Record dual-view frame for video
-                    dual_frame = env.render_dual(resolution=240)
-                    imgs.append(dual_frame)
-
-                    record_t += 1
-
-                obs, _, _, _ = env.step(action, dummy_reward=True)
-                t += 1
+            t += 1
 
     # Evaluate
     final_rew = env.compute_reward()
     task = args.task_name
-    if task == "pick_place":
-        cyl_pos, _ = env.sim.getBasePositionAndOrientation(env._cylinder_id)
-        print(f"Reward: {final_rew:.3f} | cyl: [{cyl_pos[0]:.3f}, {cyl_pos[1]:.3f}, {cyl_pos[2]:.3f}] | tray: [{env.TRAY_POS[0]:.2f}, {env.TRAY_POS[1]:.2f}]")
-    elif task == "peg_insert":
+    if task == "peg_insert":
         peg_pos, peg_quat = env.sim.getBasePositionAndOrientation(env._peg_id)
         peg_euler = pybullet.getEulerFromQuaternion(peg_quat)
         print(f"Reward: {final_rew:.3f} | peg: [{peg_pos[0]:.3f}, {peg_pos[1]:.3f}, {peg_pos[2]:.3f}] | z_rot: {np.degrees(peg_euler[2]):.1f}deg")
-    elif task == "centering":
-        cyl_pos, _ = env.sim.getBasePositionAndOrientation(env._cylinder_id)
-        print(f"Reward: {final_rew:.3f} | cyl: [{cyl_pos[0]:.3f}, {cyl_pos[1]:.3f}, {cyl_pos[2]:.3f}] | target: [{env._target_xy[0]:.2f}, {env._target_xy[1]:.2f}]")
-    elif task == "orient_place":
-        cyl_pos, cyl_quat = env.sim.getBasePositionAndOrientation(env._cylinder_id)
-        cyl_euler = pybullet.getEulerFromQuaternion(cyl_quat)
-        print(f"Reward: {final_rew:.3f} | cyl: [{cyl_pos[0]:.3f}, {cyl_pos[1]:.3f}, {cyl_pos[2]:.3f}] | z_rot: {np.degrees(cyl_euler[2]):.1f}deg | target: [{env.TARGET_POS[0]:.2f}, {env.TARGET_POS[1]:.2f}]")
-    elif task == "stack":
-        block_pos, block_quat = env.sim.getBasePositionAndOrientation(env._block_id)
-        block_euler = pybullet.getEulerFromQuaternion(block_quat)
-        print(f"Reward: {final_rew:.3f} | block: [{block_pos[0]:.3f}, {block_pos[1]:.3f}, {block_pos[2]:.3f}] | z_rot: {np.degrees(block_euler[2]):.1f}deg | base: [{env.BASE_POS[0]:.2f}, {env.BASE_POS[1]:.2f}]")
-    elif task == "position_insert":
-        peg_pos, _ = env.sim.getBasePositionAndOrientation(env._peg_id)
-        xy_dist = np.linalg.norm(np.array(peg_pos[:2]) - env.SOCKET_POS[:2])
-        print(f"Reward: {final_rew:.3f} | peg: [{peg_pos[0]:.3f}, {peg_pos[1]:.3f}, {peg_pos[2]:.3f}] | socket: [{env.SOCKET_POS[0]:.2f}, {env.SOCKET_POS[1]:.2f}] | xy_dist: {xy_dist:.3f}")
-    elif task == "cup_upright":
-        cup_pos, cup_quat = env.sim.getBasePositionAndOrientation(env._cup_id)
-        from scipy.spatial.transform import Rotation
-        r = Rotation.from_quat(cup_quat)
-        cup_z_axis = r.apply([0, 0, 1])
-        uprightness = np.dot(cup_z_axis, [0, 0, 1])
-        tilt_deg = np.degrees(np.arccos(np.clip(uprightness, -1, 1)))
-        print(f"Reward: {final_rew:.3f} | cup: [{cup_pos[0]:.3f}, {cup_pos[1]:.3f}, {cup_pos[2]:.3f}] | tilt: {tilt_deg:.1f}deg | target: [{env.TARGET_POS[0]:.2f}, {env.TARGET_POS[1]:.2f}]")
     elif task == "cup_pour":
         cup_pos, _ = env.sim.getBasePositionAndOrientation(env._cup_id)
         ball_pos, _ = env.sim.getBasePositionAndOrientation(env._ball_id)
@@ -930,10 +646,6 @@ def run_demo(args, counter=0):
         book_z = rot_mat[:, 2]
         vert = abs(np.dot(book_z, [0, 0, 1]))
         print(f"Reward: {final_rew:.3f} | book: [{book_pos[0]:.3f}, {book_pos[1]:.3f}, {book_pos[2]:.3f}] | vert: {vert:.2f} | target: [{env._target_pos[0]:.2f}, {env._target_pos[1]:.2f}, {env._target_pos[2]:.2f}]")
-    elif task == "push_t":
-        block_pos, block_yaw = env.get_block_pose()
-        xy_dist = np.linalg.norm(block_pos[:2] - env.TARGET_POS)
-        print(f"Reward: {final_rew:.3f} | block: [{block_pos[0]:.3f}, {block_pos[1]:.3f}] | yaw: {np.degrees(block_yaw):.1f}deg | xy_dist: {xy_dist:.3f} | target: [{env.TARGET_POS[0]:.2f}, {env.TARGET_POS[1]:.2f}]")
     else:
         print(f"Reward: {final_rew:.3f}")
 
@@ -981,10 +693,8 @@ def get_args():
 
     # Task
     parser.add_argument(
-        "--task_name", type=str, default="pick_place",
-        choices=["pick_place", "peg_insert", "centering", "orient_place", "stack",
-                 "position_insert", "cup_upright", "cup_pour", "book_insert",
-                 "push_t"],
+        "--task_name", type=str, default="peg_insert",
+        choices=["peg_insert", "cup_pour", "book_insert"],
     )
     # Seeds
     parser.add_argument("--seed", type=int, default=0)
