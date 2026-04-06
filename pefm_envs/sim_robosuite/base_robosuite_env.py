@@ -120,7 +120,7 @@ class RobosuiteBaseEnv:
             use_object_obs=True,
             reward_shaping=True,
             control_freq=self.freq,
-            horizon=self.max_episode_length,
+            horizon=self.max_episode_length * 10,  # oversized; our step() handles termination
             camera_names=["agentview"],
             camera_heights=[self.RENDER_RES],
             camera_widths=[self.RENDER_RES],

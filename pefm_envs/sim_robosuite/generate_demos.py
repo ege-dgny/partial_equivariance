@@ -307,6 +307,7 @@ def run_demo(args, counter: int) -> bool:
             t += 1
 
             if done:
+                sim_unstable = True
                 break
 
     # Evaluate
