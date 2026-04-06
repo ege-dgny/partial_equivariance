@@ -201,6 +201,18 @@ def run_demo(args, counter: int) -> bool:
     # Object rotation angle
     ang = env._object_rotation[-1]
 
+    # --- Debug: print positions ---
+    eef_pos = obs[0, :3]
+    print(f"  EEF: {eef_pos}")
+    if hasattr(env, "get_can_pos"):
+        print(f"  Can: {env.get_can_pos()}")
+        print(f"  Bin: {env.get_bin_pos()}")
+    if hasattr(env, "get_nut_pos"):
+        print(f"  Nut: {env.get_nut_pos()}")
+        print(f"  Peg: {env.get_peg_pos()}")
+    print(f"  Obj rotation (Z): {np.rad2deg(ang):.1f} deg")
+    print(f"  Obs keys: {list(env._cached_obs_dict.keys())[:10]}")
+
     # Build task-specific sketch
     if args.task_name == "pick_place_fixed":
         sketch, object_phases, obj_center = _build_pick_place_sketch(env, obs)
