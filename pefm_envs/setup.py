@@ -20,5 +20,6 @@ setup(
     ],
     extras_require={
         "genesis": ["genesis-world"],
+        "robosuite": ["robosuite>=1.5", "mujoco>=3.0"],
     },
 )

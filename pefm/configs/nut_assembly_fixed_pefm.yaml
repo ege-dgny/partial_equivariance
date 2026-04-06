@@ -1,0 +1,25 @@
+defaults:
+  - base_pefm
+
+env:
+  env_class: nut_assembly_fixed
+  num_eef: 1
+  dof: 7
+  eef_dim: 13
+  args:
+    num_eef: 1
+    dof: 7
+    max_episode_length: 300
+    freq: 20
+    randomize_rotation: true
+
+model:
+  symmetry:
+    group_type: c4
+    distribution_type: gumbel_categorical
+    num_samples: 4
+    num_samples_eval: 4
+    entropy_weight: 0.01
+    gumbel_tau: 1.0
+    gumbel_tau_min: 0.1
+    gumbel_anneal_rate: 0.0003

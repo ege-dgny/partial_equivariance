@@ -69,6 +69,16 @@ def get_env_class(env_name):
     elif env_name == "push_t_gym":
         from pefm_envs.gym_pusht.pusht_wrapper import GymPushTEnv
         return GymPushTEnv
+    # robosuite-backed tasks (MuJoCo, contact-based)
+    elif env_name == "pick_place_fixed":
+        from pefm_envs.sim_robosuite.pick_place_fixed import PickPlaceFixedEnv
+        return PickPlaceFixedEnv
+    elif env_name == "nut_assembly_fixed":
+        from pefm_envs.sim_robosuite.nut_assembly_fixed import NutAssemblyFixedEnv
+        return NutAssemblyFixedEnv
+    elif env_name == "tool_hang":
+        from pefm_envs.sim_robosuite.tool_hang import ToolHangEnv
+        return ToolHangEnv
     else:
         raise ValueError(f"Environment [{env_name}] not found.")
 

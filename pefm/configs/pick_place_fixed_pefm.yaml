@@ -1,0 +1,22 @@
+defaults:
+  - base_pefm
+
+env:
+  env_class: pick_place_fixed
+  num_eef: 1
+  dof: 7
+  eef_dim: 13
+  args:
+    num_eef: 1
+    dof: 7
+    max_episode_length: 200
+    freq: 20
+    randomize_rotation: true
+
+model:
+  symmetry:
+    group_type: so2
+    distribution_type: projected_normal
+    num_samples: 8
+    num_samples_eval: 16
+    entropy_weight: 0.01
