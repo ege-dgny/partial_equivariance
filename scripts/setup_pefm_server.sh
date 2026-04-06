@@ -73,7 +73,9 @@ if torch.cuda.is_available():
     print(f'  CUDA version: {torch.version.cuda}')
     print(f'  GPU count: {torch.cuda.device_count()}')
     for i in range(torch.cuda.device_count()):
-        print(f'  GPU {i}: {torch.cuda.get_device_name(i)} ({torch.cuda.get_device_properties(i).total_mem / 1e9:.1f} GB)')
+        props = torch.cuda.get_device_properties(i)
+        mem = getattr(props, 'total_memory', getattr(props, 'total_mem', 0))
+        print(f'  GPU {i}: {torch.cuda.get_device_name(i)} ({mem / 1e9:.1f} GB)')
 "
 
 python -c "import mujoco; print(f'  MuJoCo: {mujoco.__version__}')"

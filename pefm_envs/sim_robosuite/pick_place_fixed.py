@@ -27,9 +27,8 @@ class PickPlaceFixedEnv(RobosuiteBaseEnv):
         return "PickPlaceCan"
 
     def _modify_env_kwargs(self) -> dict:
-        return {
-            "single_object_mode": 2,  # can only
-        }
+        # PickPlaceCan is already single-object (can only)
+        return {}
 
     def reset(self):
         obs = super().reset()
