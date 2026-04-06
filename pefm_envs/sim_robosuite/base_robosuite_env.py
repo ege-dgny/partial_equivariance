@@ -351,7 +351,7 @@ class RobosuiteBaseEnv:
         # robosuite may or may not have sideview; fallback to frontview
         try:
             side = self.env.sim.render(
-                camera_name="sideview",
+                camera_name="frontview",
                 width=resolution, height=resolution,
             )[::-1]
         except Exception:

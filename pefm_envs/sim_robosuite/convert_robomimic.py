@@ -116,7 +116,7 @@ def create_replay_env(
         reward_shaping=True,
         control_freq=control_freq,
         horizon=10000,
-        camera_names=["agentview", "sideview"],
+        camera_names=["agentview", "frontview"],
         camera_heights=[render_res, render_res],
         camera_widths=[render_res, render_res],
         camera_depths=[True, True],
@@ -369,7 +369,7 @@ def convert_hdf5(
 
             # Video frame (dual view)
             front = rgb
-            side_img = obs_dict.get("sideview_image")
+            side_img = obs_dict.get("frontview_image")
             if side_img is not None:
                 side_img = side_img[::-1].copy()
                 dual = np.concatenate([front, side_img], axis=1)
