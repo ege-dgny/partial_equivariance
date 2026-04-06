@@ -129,6 +129,32 @@ def create_replay_env(
 #  Point cloud extraction
 # ------------------------------------------------------------------ #
 
+def _linearize_depth(depth_buffer: np.ndarray, sim) -> np.ndarray:
+    """Convert raw GL depth buffer [0,1] to metric depth (meters).
+
+    MuJoCo depth is non-linear (NDC). Linearize using model znear/zfar.
+    """
+    extent = sim.model.stat.extent
+    znear = sim.model.vis.map.znear * extent
+    zfar = sim.model.vis.map.zfar * extent
+    # Linearize: raw GL buffer -> metric distance
+    return znear / (1.0 - depth_buffer * (1.0 - znear / zfar))
+
+
+def _get_robot_geom_ids(sim) -> set[int]:
+    """Get geom IDs belonging to robot/gripper/mount (to exclude from PC)."""
+    skip_keywords = {"robot", "gripper", "mount", "base", "fixed_mount"}
+    robot_geom_ids = set()
+    for body_id in range(sim.model.nbody):
+        name = sim.model.body_id2name(body_id)
+        if name and any(s in name.lower() for s in skip_keywords):
+            geom_start = sim.model.body_geomadr[body_id]
+            geom_count = sim.model.body_geomnum[body_id]
+            for g in range(geom_start, geom_start + geom_count):
+                robot_geom_ids.add(g)
+    return robot_geom_ids
+
+
 def extract_point_cloud(
     sim,
     depth: np.ndarray,
@@ -139,7 +165,8 @@ def extract_point_cloud(
 ) -> np.ndarray:
     """Extract world-frame point cloud from depth + segmentation.
 
-    Filters out robot, table, floor — keeps task objects only.
+    Excludes robot geoms via segmentation (element=geom ID).
+    Filters by workspace bounds to remove walls/floor.
     Returns (num_points, 3) array, padded/subsampled as needed.
     """
     if depth.ndim == 3:
@@ -148,6 +175,9 @@ def extract_point_cloud(
         seg = seg[:, :, 0]
 
     H, W = depth.shape
+
+    # Linearize depth
+    z_metric = _linearize_depth(depth, sim)
 
     # Camera intrinsics
     cam_id = sim.model.camera_name2id(camera_name)
@@ -159,25 +189,21 @@ def extract_point_cloud(
     cam_pos = sim.data.cam_xpos[cam_id]
     cam_mat = sim.data.cam_xmat[cam_id].reshape(3, 3)
 
-    # Find object body IDs (exclude robot/table/floor)
-    skip_keywords = {"robot", "gripper", "base", "world", "table", "floor", "mount"}
-    object_ids = []
-    for i in range(sim.model.nbody):
-        name = sim.model.body_id2name(i)
-        if name and not any(s in name.lower() for s in skip_keywords):
-            object_ids.append(i)
+    # Exclude robot geoms (seg uses geom IDs, not body IDs)
+    robot_geom_ids = _get_robot_geom_ids(sim)
 
-    if not object_ids:
-        # Fallback: use all non-zero depth
-        valid_mask = (depth > 0.01) & (depth < 5.0)
-    else:
-        valid_mask = np.isin(seg, object_ids) & (depth > 0.01) & (depth < 5.0)
+    # Valid: not robot, not background (depth near zfar), reasonable range
+    valid_mask = (
+        ~np.isin(seg, list(robot_geom_ids))
+        & (z_metric > 0.1)
+        & (z_metric < 5.0)
+    )
 
     if not valid_mask.any():
         return np.zeros((num_points, 3), dtype=np.float32)
 
     v_grid, u_grid = np.where(valid_mask)
-    z_vals = depth[v_grid, u_grid]
+    z_vals = z_metric[v_grid, u_grid]
 
     # Unproject to camera frame
     x_cam = (u_grid - cx) * z_vals / f
@@ -189,11 +215,24 @@ def extract_point_cloud(
     # World frame
     pts_world = (cam_mat.T @ pts_cam.T).T + cam_pos
 
+    # Workspace bounds filter (table area, not walls/ceiling)
+    ws_mask = (
+        (pts_world[:, 2] > 0.78)   # above table surface
+        & (pts_world[:, 2] < 1.3)  # below ceiling
+        & (pts_world[:, 0] > -0.5) # X bounds
+        & (pts_world[:, 0] < 0.8)
+        & (pts_world[:, 1] > -0.6) # Y bounds
+        & (pts_world[:, 1] < 0.6)
+    )
+    pts_world = pts_world[ws_mask]
+
     # Subsample / pad to num_points
     n = len(pts_world)
     if rng is None:
         rng = np.random.RandomState(0)
 
+    if n == 0:
+        return np.zeros((num_points, 3), dtype=np.float32)
     if n >= num_points:
         idx = rng.choice(n, num_points, replace=False)
     else:

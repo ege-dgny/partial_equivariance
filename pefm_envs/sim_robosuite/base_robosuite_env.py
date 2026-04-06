@@ -251,24 +251,20 @@ class RobosuiteBaseEnv:
     # ---- Point cloud extraction ----
 
     def _get_point_cloud(self, obs_dict: dict | None = None) -> np.ndarray:
-        """Extract segmented point cloud from depth camera.
+        """Extract point cloud from depth camera.
 
-        Returns (N, 3) world-frame points for task objects only.
+        Linearizes GL depth, excludes robot geoms, filters by workspace.
+        Returns (N, 3) world-frame points.
         """
         if obs_dict is None:
             obs_dict = self._cached_obs_dict
         if obs_dict is None:
             return np.zeros((0, 3), dtype=np.float32)
 
-        # Try standard key names (robosuite 1.5.x)
-        depth_key = "agentview_depth"
-        seg_key = "agentview_segmentation_element"
-
-        depth = obs_dict.get(depth_key)
-        seg = obs_dict.get(seg_key)
+        depth = obs_dict.get("agentview_depth")
+        seg = obs_dict.get("agentview_segmentation_element")
 
         if depth is None or seg is None:
-            # Fallback: try rendering directly
             return np.zeros((0, 3), dtype=np.float32)
 
         if depth.ndim == 3:
@@ -276,43 +272,60 @@ class RobosuiteBaseEnv:
         if seg.ndim == 3:
             seg = seg[:, :, 0]
 
+        sim = self.env.sim
         H, W = depth.shape
 
-        # Camera intrinsics from MuJoCo
-        cam_id = self.env.sim.model.camera_name2id("agentview")
-        fovy = self.env.sim.model.cam_fovy[cam_id]
+        # Linearize depth (raw GL buffer -> meters)
+        extent = sim.model.stat.extent
+        znear = sim.model.vis.map.znear * extent
+        zfar = sim.model.vis.map.zfar * extent
+        z_metric = znear / (1.0 - depth * (1.0 - znear / zfar))
+
+        # Camera intrinsics
+        cam_id = sim.model.camera_name2id("agentview")
+        fovy = sim.model.cam_fovy[cam_id]
         f = 0.5 * H / np.tan(np.deg2rad(fovy) / 2.0)
         cx, cy = W / 2.0, H / 2.0
 
         # Camera extrinsics
-        cam_pos = self.env.sim.data.cam_xpos[cam_id]
-        cam_mat = self.env.sim.data.cam_xmat[cam_id].reshape(3, 3)
+        cam_pos = sim.data.cam_xpos[cam_id]
+        cam_mat = sim.data.cam_xmat[cam_id].reshape(3, 3)
 
-        # Filter by object body IDs
-        object_body_ids = self._get_object_body_ids()
+        # Exclude robot geoms (seg uses geom IDs, not body IDs)
+        skip_kw = {"robot", "gripper", "mount", "base", "fixed_mount"}
+        robot_geom_ids = set()
+        for body_id in range(sim.model.nbody):
+            name = sim.model.body_id2name(body_id)
+            if name and any(s in name.lower() for s in skip_kw):
+                gs = sim.model.body_geomadr[body_id]
+                gn = sim.model.body_geomnum[body_id]
+                robot_geom_ids.update(range(gs, gs + gn))
+
         valid_mask = (
-            np.isin(seg, object_body_ids)
-            & (depth > 0.01)
-            & (depth < 5.0)
+            ~np.isin(seg, list(robot_geom_ids))
+            & (z_metric > 0.1)
+            & (z_metric < 5.0)
         )
 
         if not valid_mask.any():
             return np.zeros((0, 3), dtype=np.float32)
 
         v_grid, u_grid = np.where(valid_mask)
-        z_vals = depth[v_grid, u_grid]
+        z_vals = z_metric[v_grid, u_grid]
 
-        # Unproject to camera frame
         x_cam = (u_grid - cx) * z_vals / f
         y_cam = (v_grid - cy) * z_vals / f
-
-        # MuJoCo camera convention: -Z forward, X right, Y down
         pts_cam = np.stack([x_cam, y_cam, -z_vals], axis=-1)
 
-        # Transform to world frame
         pts_world = (cam_mat.T @ pts_cam.T).T + cam_pos
 
-        return pts_world.astype(np.float32)
+        # Workspace bounds (table area)
+        ws = (
+            (pts_world[:, 2] > 0.78) & (pts_world[:, 2] < 1.3)
+            & (pts_world[:, 0] > -0.5) & (pts_world[:, 0] < 0.8)
+            & (pts_world[:, 1] > -0.6) & (pts_world[:, 1] < 0.6)
+        )
+        return pts_world[ws].astype(np.float32)
 
     def _subsample_pc(self, pc: np.ndarray) -> np.ndarray:
         """Subsample or pad point cloud to PC_NUM_POINTS."""
