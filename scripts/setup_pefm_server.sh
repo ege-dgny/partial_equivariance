@@ -21,13 +21,11 @@ conda create -n "${ENV_NAME}" python="${PYTHON_VERSION}" -y
 eval "$(conda shell.bash hook)"
 conda activate "${ENV_NAME}"
 
-# ---- 2. PyTorch (CUDA 13.1) ----
-# Check for CUDA 13.1 compatible wheel. If the stable index doesn't have
-# cu131, fall back to nightly or cu124 (should still work with 13.1 driver).
-echo "Installing PyTorch..."
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu131 2>/dev/null \
-  || pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124 \
-  || pip install torch torchvision torchaudio
+# ---- 2. PyTorch (CUDA 13.0 bundled) ----
+# PyTorch 2.11+ from PyPI ships with cuda-toolkit==13.0.2 by default.
+# CUDA 13.1 driver is backward-compatible with 13.0 toolkit — no special index needed.
+echo "Installing PyTorch (default PyPI — ships with CUDA 13.0 toolkit)..."
+pip install torch torchvision torchaudio
 
 python -c "import torch; print(f'PyTorch {torch.__version__}, CUDA available: {torch.cuda.is_available()}, CUDA version: {torch.version.cuda}')"
 
