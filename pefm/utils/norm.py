@@ -77,7 +77,10 @@ class RotationAwareNormalizer(object):
 
         dmin = data.min(0)[0].detach()
         dmax = data.max(0)[0].detach()
-        scale = (dmax - dmin).clamp(min=1e-12)
+        # Use 1.0 for constant dims (range=0) to avoid division by ~0;
+        # keep actual range for non-constant dims
+        raw_range = dmax - dmin
+        scale = torch.where(raw_range < 1e-6, torch.ones_like(raw_range), raw_range)
 
         for group in coupled_groups:
             max_range = scale[group].max()

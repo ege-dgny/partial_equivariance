@@ -26,9 +26,8 @@ class NutAssemblyFixedEnv(RobosuiteBaseEnv):
         return "NutAssemblySquare"
 
     def _modify_env_kwargs(self) -> dict:
-        return {
-            "single_object_mode": 2,  # square nut only
-        }
+        # NutAssemblySquare already uses only the square nut
+        return {}
 
     def reset(self):
         obs = super().reset()

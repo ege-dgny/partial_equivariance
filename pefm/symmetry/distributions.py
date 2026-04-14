@@ -34,7 +34,7 @@ class ProjectedNormalSO2(nn.Module):
         Returns: (B, N) angles in [0, 2*pi)
         """
         mu = params[:, :2]  # (B, 2)
-        log_sigma = params[:, 2:]  # (B, 2)
+        log_sigma = params[:, 2:].clamp(-4.0, 4.0)  # (B, 2)
         sigma = torch.exp(log_sigma)
 
         B = params.shape[0]
@@ -63,11 +63,11 @@ class ProjectedNormalSO2(nn.Module):
         When sigma is small, distribution concentrates and entropy decreases.
         """
         mu = params[:, :2]  # (B, 2)
-        log_sigma = params[:, 2:]  # (B, 2)
+        log_sigma = params[:, 2:].clamp(-4.0, 4.0)  # (B, 2)
         sigma = torch.exp(log_sigma)
 
         # Concentration: how peaked the distribution is
-        concentration_sq = (mu / sigma).pow(2).sum(dim=-1)  # (B,)
+        concentration_sq = (mu / sigma).pow(2).sum(dim=-1).clamp(max=100.0)  # (B,)
 
         # Entropy approximation
         H = math.log(2 * math.pi) + log_sigma.mean(dim=-1) - 0.5 * concentration_sq

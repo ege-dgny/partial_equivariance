@@ -129,18 +129,6 @@ def create_replay_env(
 #  Point cloud extraction
 # ------------------------------------------------------------------ #
 
-def _linearize_depth(depth_buffer: np.ndarray, sim) -> np.ndarray:
-    """Convert raw GL depth buffer [0,1] to metric depth (meters).
-
-    MuJoCo depth is non-linear (NDC). Linearize using model znear/zfar.
-    """
-    extent = sim.model.stat.extent
-    znear = sim.model.vis.map.znear * extent
-    zfar = sim.model.vis.map.zfar * extent
-    # Linearize: raw GL buffer -> metric distance
-    return znear / (1.0 - depth_buffer * (1.0 - znear / zfar))
-
-
 def _get_robot_geom_ids(sim) -> set[int]:
     """Get geom IDs belonging to robot/gripper/mount (to exclude from PC)."""
     skip_keywords = {"robot", "gripper", "mount", "base", "fixed_mount"}
@@ -160,15 +148,27 @@ def extract_point_cloud(
     depth: np.ndarray,
     seg: np.ndarray,
     camera_name: str = "agentview",
+    camera_height: int = 240,
+    camera_width: int = 240,
     num_points: int = 4096,
     rng: np.random.RandomState | None = None,
 ) -> np.ndarray:
-    """Extract world-frame point cloud from depth + segmentation.
+    """Extract world-frame point cloud using robosuite's camera utilities.
 
-    Excludes robot geoms via segmentation (element=geom ID).
-    Filters by workspace bounds to remove walls/floor.
-    Returns (num_points, 3) array, padded/subsampled as needed.
+    Uses robosuite's get_real_depth_map, get_camera_intrinsic_matrix,
+    and get_camera_extrinsic_matrix for correct depth linearization
+    and camera-to-world transforms.
+
+    Excludes robot geoms via segmentation (element = geom ID).
+    Filters by workspace bounds.
+    Returns (num_points, 3) padded/subsampled.
     """
+    from robosuite.utils.camera_utils import (
+        get_camera_extrinsic_matrix,
+        get_camera_intrinsic_matrix,
+        get_real_depth_map,
+    )
+
     if depth.ndim == 3:
         depth = depth[:, :, 0]
     if seg.ndim == 3:
@@ -176,23 +176,23 @@ def extract_point_cloud(
 
     H, W = depth.shape
 
-    # Linearize depth
-    z_metric = _linearize_depth(depth, sim)
+    # Linearize depth (robosuite handles znear/zfar internally)
+    z_metric = get_real_depth_map(sim, depth)
 
-    # Camera intrinsics
-    cam_id = sim.model.camera_name2id(camera_name)
-    fovy = sim.model.cam_fovy[cam_id]
-    f = 0.5 * H / np.tan(np.deg2rad(fovy) / 2.0)
-    cx, cy = W / 2.0, H / 2.0
+    # Camera matrices (robosuite handles MuJoCo conventions)
+    intrinsic = get_camera_intrinsic_matrix(
+        sim, camera_name, camera_height, camera_width,
+    )
+    extrinsic = get_camera_extrinsic_matrix(sim, camera_name)
+    # extrinsic is world-to-camera; invert for camera-to-world
+    cam2world = np.linalg.inv(extrinsic)
 
-    # Camera extrinsics
-    cam_pos = sim.data.cam_xpos[cam_id]
-    cam_mat = sim.data.cam_xmat[cam_id].reshape(3, 3)
+    fx, fy = intrinsic[0, 0], intrinsic[1, 1]
+    cx, cy = intrinsic[0, 2], intrinsic[1, 2]
 
     # Exclude robot geoms (seg uses geom IDs, not body IDs)
     robot_geom_ids = _get_robot_geom_ids(sim)
 
-    # Valid: not robot, not background (depth near zfar), reasonable range
     valid_mask = (
         ~np.isin(seg, list(robot_geom_ids))
         & (z_metric > 0.1)
@@ -205,32 +205,28 @@ def extract_point_cloud(
     v_grid, u_grid = np.where(valid_mask)
     z_vals = z_metric[v_grid, u_grid]
 
-    # Unproject to camera frame
-    x_cam = (u_grid - cx) * z_vals / f
-    y_cam = (v_grid - cy) * z_vals / f
+    # Unproject to camera frame (OpenCV convention from robosuite extrinsic)
+    x_cam = (u_grid - cx) * z_vals / fx
+    y_cam = (v_grid - cy) * z_vals / fy
+    pts_cam = np.stack([x_cam, y_cam, z_vals, np.ones_like(z_vals)], axis=-1)
 
-    # MuJoCo camera: -Z forward, X right, Y down
-    pts_cam = np.stack([x_cam, y_cam, -z_vals], axis=-1)
+    # Camera to world
+    pts_world = (cam2world @ pts_cam.T).T[:, :3]
 
-    # World frame
-    pts_world = (cam_mat.T @ pts_cam.T).T + cam_pos
-
-    # Workspace bounds filter (table area, not walls/ceiling)
+    # Workspace bounds (table area)
     ws_mask = (
-        (pts_world[:, 2] > 0.78)   # above table surface
-        & (pts_world[:, 2] < 1.3)  # below ceiling
-        & (pts_world[:, 0] > -0.5) # X bounds
+        (pts_world[:, 2] > 0.78)
+        & (pts_world[:, 2] < 1.3)
+        & (pts_world[:, 0] > -0.5)
         & (pts_world[:, 0] < 0.8)
-        & (pts_world[:, 1] > -0.6) # Y bounds
+        & (pts_world[:, 1] > -0.6)
         & (pts_world[:, 1] < 0.6)
     )
     pts_world = pts_world[ws_mask]
 
-    # Subsample / pad to num_points
     n = len(pts_world)
     if rng is None:
         rng = np.random.RandomState(0)
-
     if n == 0:
         return np.zeros((num_points, 3), dtype=np.float32)
     if n >= num_points:
@@ -355,45 +351,58 @@ def convert_hdf5(
             env.sim.set_state_from_flattened(states[t])
             env.sim.forward()
 
-            # Render
-            obs_dict = env._get_observations()
+            # Render directly via sim.render() — _get_observations() caches
+            # stale images and does NOT re-render after set_state_from_flattened
+            rgb = env.sim.render(
+                camera_name="agentview",
+                width=render_res, height=render_res,
+            )[::-1].copy()
 
-            # Extract depth + segmentation for PC
-            depth = obs_dict.get("agentview_depth")
-            seg = obs_dict.get("agentview_segmentation_element")
-
-            if depth is not None and seg is not None:
-                pc = extract_point_cloud(
-                    env.sim, depth, seg,
-                    camera_name="agentview",
-                    num_points=num_points,
-                    rng=rng,
-                )
+            depth_raw = env.sim.render(
+                camera_name="agentview",
+                width=render_res, height=render_res,
+                depth=True,
+            )
+            if isinstance(depth_raw, tuple):
+                _, depth_map = depth_raw
             else:
-                pc = np.zeros((num_points, 3), dtype=np.float32)
+                depth_map = depth_raw
 
-            # RGB for reference
-            rgb = obs_dict.get("agentview_image")
-            if rgb is not None:
-                rgb = rgb[::-1].copy()  # MuJoCo renders upside down
+            seg_raw = env.sim.render(
+                camera_name="agentview",
+                width=render_res, height=render_res,
+                segmentation=True,
+            )
+            if isinstance(seg_raw, tuple):
+                _, seg_map = seg_raw
             else:
-                rgb = np.zeros((render_res, render_res, 3), dtype=np.uint8)
+                seg_map = seg_raw
+            # segmentation returns (H, W, 2): [body_id, geom_id]
+            if seg_map.ndim == 3 and seg_map.shape[2] == 2:
+                seg_map = seg_map[:, :, 1]  # use geom IDs
+
+            pc = extract_point_cloud(
+                env.sim, depth_map, seg_map,
+                camera_name="agentview",
+                camera_height=render_res,
+                camera_width=render_res,
+                num_points=num_points,
+                rng=rng,
+            )
 
             # Action conversion
             action = convert_action(actions[t], freq=freq)
 
-            # EEF observation
+            # EEF observation (from HDF5 — ground truth from collection)
             if has_eef and has_quat and has_gripper:
                 eef_pos_val = obs_grp["robot0_eef_pos"][t]
                 eef_quat_val = obs_grp["robot0_eef_quat"][t]
                 gripper_qpos_val = obs_grp["robot0_gripper_qpos"][t]
-                eef_obs = build_eef_obs(eef_pos_val, eef_quat_val, gripper_qpos_val)
             else:
-                # Build from sim state
-                eef_pos_val = obs_dict.get("robot0_eef_pos", np.zeros(3))
-                eef_quat_val = obs_dict.get("robot0_eef_quat", np.array([0, 0, 0, 1.0]))
-                gripper_qpos_val = obs_dict.get("robot0_gripper_qpos", np.array([0.04, 0.04]))
-                eef_obs = build_eef_obs(eef_pos_val, eef_quat_val, gripper_qpos_val)
+                eef_pos_val = np.zeros(3)
+                eef_quat_val = np.array([0, 0, 0, 1.0])
+                gripper_qpos_val = np.array([0.04, 0.04])
+            eef_obs = build_eef_obs(eef_pos_val, eef_quat_val, gripper_qpos_val)
 
             # Save NPZ
             fn = f"{prefix}_ep{ep_idx:06d}_view0_t{frame_count:04d}.npz"
@@ -407,13 +416,12 @@ def convert_hdf5(
             )
 
             # Video frame (dual view)
-            front = rgb
-            side_img = obs_dict.get("frontview_image")
-            if side_img is not None:
-                side_img = side_img[::-1].copy()
-                dual = np.concatenate([front, side_img], axis=1)
-            else:
-                dual = front
+            front_img = rgb
+            side_img = env.sim.render(
+                camera_name="frontview",
+                width=render_res, height=render_res,
+            )[::-1].copy()
+            dual = np.concatenate([front_img, side_img], axis=1)
             vid_frames.append(dual)
 
             frame_count += 1

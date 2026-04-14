@@ -253,9 +253,17 @@ class RobosuiteBaseEnv:
     def _get_point_cloud(self, obs_dict: dict | None = None) -> np.ndarray:
         """Extract point cloud from depth camera.
 
-        Linearizes GL depth, excludes robot geoms, filters by workspace.
+        Uses robosuite's camera utilities for correct depth linearization
+        and camera-to-world transforms. Excludes robot geoms, filters by
+        workspace bounds.
         Returns (N, 3) world-frame points.
         """
+        from robosuite.utils.camera_utils import (
+            get_camera_extrinsic_matrix,
+            get_camera_intrinsic_matrix,
+            get_real_depth_map,
+        )
+
         if obs_dict is None:
             obs_dict = self._cached_obs_dict
         if obs_dict is None:
@@ -275,21 +283,14 @@ class RobosuiteBaseEnv:
         sim = self.env.sim
         H, W = depth.shape
 
-        # Linearize depth (raw GL buffer -> meters)
-        extent = sim.model.stat.extent
-        znear = sim.model.vis.map.znear * extent
-        zfar = sim.model.vis.map.zfar * extent
-        z_metric = znear / (1.0 - depth * (1.0 - znear / zfar))
+        # Use robosuite utilities (handles MuJoCo conventions correctly)
+        z_metric = get_real_depth_map(sim, depth)
+        intrinsic = get_camera_intrinsic_matrix(sim, "agentview", H, W)
+        extrinsic = get_camera_extrinsic_matrix(sim, "agentview")
+        cam2world = np.linalg.inv(extrinsic)
 
-        # Camera intrinsics
-        cam_id = sim.model.camera_name2id("agentview")
-        fovy = sim.model.cam_fovy[cam_id]
-        f = 0.5 * H / np.tan(np.deg2rad(fovy) / 2.0)
-        cx, cy = W / 2.0, H / 2.0
-
-        # Camera extrinsics
-        cam_pos = sim.data.cam_xpos[cam_id]
-        cam_mat = sim.data.cam_xmat[cam_id].reshape(3, 3)
+        fx, fy = intrinsic[0, 0], intrinsic[1, 1]
+        cx, cy = intrinsic[0, 2], intrinsic[1, 2]
 
         # Exclude robot geoms (seg uses geom IDs, not body IDs)
         skip_kw = {"robot", "gripper", "mount", "base", "fixed_mount"}
@@ -313,11 +314,10 @@ class RobosuiteBaseEnv:
         v_grid, u_grid = np.where(valid_mask)
         z_vals = z_metric[v_grid, u_grid]
 
-        x_cam = (u_grid - cx) * z_vals / f
-        y_cam = (v_grid - cy) * z_vals / f
-        pts_cam = np.stack([x_cam, y_cam, -z_vals], axis=-1)
-
-        pts_world = (cam_mat.T @ pts_cam.T).T + cam_pos
+        x_cam = (u_grid - cx) * z_vals / fx
+        y_cam = (v_grid - cy) * z_vals / fy
+        pts_cam = np.stack([x_cam, y_cam, z_vals, np.ones_like(z_vals)], axis=-1)
+        pts_world = (cam2world @ pts_cam.T).T[:, :3]
 
         # Workspace bounds (table area)
         ws = (
@@ -351,7 +351,7 @@ class RobosuiteBaseEnv:
 
         result = {"images": [img]}
         if return_pc:
-            result["pc"] = self._get_point_cloud()
+            result["pc"] = self._subsample_pc(self._get_point_cloud())
         return result
 
     def render_dual(self, resolution: int = 240) -> np.ndarray:

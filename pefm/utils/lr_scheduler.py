@@ -1,8 +1,9 @@
+from typing import Optional, Union
+
+from torch.optim import Optimizer
+
 from diffusers.optimization import (
-    Union,
     SchedulerType,
-    Optional,
-    Optimizer,
     TYPE_TO_SCHEDULER_FUNCTION,
 )
 
