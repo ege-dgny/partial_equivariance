@@ -3,8 +3,14 @@ Utilities for loading, saving, and manipulating videos and images.
 """
 
 import os
+import sys
 import numpy as np
 import cv2
+import skvideo
+# Point skvideo at the conda env's ffmpeg if not on PATH
+_env_bin = os.path.join(os.path.dirname(sys.executable))
+if os.path.exists(os.path.join(_env_bin, "ffmpeg")):
+    skvideo.setFFmpegPath(_env_bin)
 import skvideo.io
 import imageio
 
