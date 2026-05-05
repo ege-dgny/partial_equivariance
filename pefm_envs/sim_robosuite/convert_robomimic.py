@@ -177,6 +177,7 @@ def extract_point_cloud(
     H, W = depth.shape
 
     # Linearize depth (robosuite handles znear/zfar internally)
+    depth = np.clip(np.nan_to_num(depth, nan=1.0, posinf=1.0, neginf=0.0), 0.0, 1.0)
     z_metric = get_real_depth_map(sim, depth)
 
     # Camera matrices (robosuite handles MuJoCo conventions)
