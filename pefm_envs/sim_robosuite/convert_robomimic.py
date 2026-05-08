@@ -177,6 +177,8 @@ def extract_point_cloud(
     H, W = depth.shape
 
     # Linearize depth (robosuite handles znear/zfar internally)
+    # Clamp out-of-range depth values (occasional state-replay glitches push
+    # values outside [0,1] which would trip robosuite's assertion).
     depth = np.clip(np.nan_to_num(depth, nan=1.0, posinf=1.0, neginf=0.0), 0.0, 1.0)
     z_metric = get_real_depth_map(sim, depth)
 
@@ -248,10 +250,11 @@ def convert_action(
 ) -> np.ndarray:
     """Convert robosuite action to PEFM format.
 
-    robosuite: [dx, dy, dz, dax, day, daz, grip]  grip in [-1, +1]
-    PEFM:      [grip, vx, vy, vz, drx, dry, drz]  grip in [0, 1]
+    robosuite: [dx, dy, dz, dax, day, daz, grip]  in OSC-input units [-1, +1]
+    PEFM:      [grip, vx, vy, vz, drx, dry, drz]  same OSC-input units, grip in [0, 1]
 
-    Delta -> velocity: vel = delta * freq
+    Note: stored action stays in OSC-input units (no freq multiplication).
+    base_robosuite_env.step() passes these directly to robosuite's OSC controller.
     """
     dx, dy, dz = robo_action[0], robo_action[1], robo_action[2]
     dax, day, daz = robo_action[3], robo_action[4], robo_action[5]
@@ -260,9 +263,9 @@ def convert_action(
     # Grip: -1/+1 -> 0/1
     grip_pefm = np.clip((grip_robo + 1.0) / 2.0, 0.0, 1.0)
 
-    # Delta -> velocity
-    vx, vy, vz = dx * freq, dy * freq, dz * freq
-    drx, dry, drz = dax * freq, day * freq, daz * freq
+    # Keep in OSC-input units (no scaling)
+    vx, vy, vz = dx, dy, dz
+    drx, dry, drz = dax, day, daz
 
     return np.array([grip_pefm, vx, vy, vz, drx, dry, drz], dtype=np.float32)
 

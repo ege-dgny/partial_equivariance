@@ -190,25 +190,19 @@ class RobosuiteBaseEnv:
             )
 
         # --- Grip: PEFM 0/1 -> robosuite -1/+1 ---
+        # Single threshold at 0.5 so policy outputs in [0.1, 0.9] are not silently
+        # ignored (was hysteresis 0.1/0.9; flow-matching predictions naturally
+        # land mid-transition and would never trip either threshold).
         grip_pefm = action[0]
-        if grip_pefm >= self.GRIP_CLOSE_THRESH:
-            self._gripper_target_closed = True
-        elif grip_pefm <= self.GRIP_OPEN_THRESH:
-            self._gripper_target_closed = False
-
+        self._gripper_target_closed = bool(grip_pefm >= 0.5)
         grip_robo = 1.0 if self._gripper_target_closed else -1.0
 
-        # --- Motion: velocity -> delta pose ---
-        dt = 1.0 / self.freq
+        # Action is already in OSC-input units [-1, 1]; pass directly.
         pos_vel = action[1:4]
         ori_vel = action[4:7] if self.dof >= 7 else np.zeros(3)
 
-        delta_pos = pos_vel * dt
-        delta_ori = ori_vel * dt
-
-        # Clip deltas to robosuite action range [-1, 1]
-        delta_pos = np.clip(delta_pos, -1.0, 1.0)
-        delta_ori = np.clip(delta_ori, -1.0, 1.0)
+        delta_pos = np.clip(pos_vel, -1.0, 1.0)
+        delta_ori = np.clip(ori_vel, -1.0, 1.0)
 
         # robosuite action: [dx, dy, dz, dax, day, daz, grip]
         robosuite_action = np.concatenate([delta_pos, delta_ori, [grip_robo]])

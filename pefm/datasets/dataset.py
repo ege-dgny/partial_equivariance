@@ -74,6 +74,11 @@ class BaseDataset(Dataset):
             for fn in self.file_names
             if ep_length_dict[key_fn(fn)] >= self.min_demo_length
         ]
+
+        # Save the offset/length lookups (still needed by the filter applied
+        # AFTER _init_cache below).
+        self._ep_t_offset_local = ep_t_offset_dict
+        self._ep_length_local = ep_length_dict
         ep_t_offset_dict = {
             k: v
             for k, v in ep_t_offset_dict.items()
@@ -89,6 +94,20 @@ class BaseDataset(Dataset):
             self.use_four_digit_time = False
 
         self._init_cache()
+
+        # Filter near-end frames AFTER cache is built so the cache still
+        # contains the tail files needed when constructing pred_horizon
+        # sequences anchored at earlier frames.
+        def _frame_t(fn):
+            return int(fn.split("/")[-1].split(".")[0].split("_")[-1][1:])
+
+        self.file_names = [
+            fn
+            for fn in self.file_names
+            if (_frame_t(fn) - self._ep_t_offset_local[key_fn(fn)])
+            + self.pred_horizon
+            <= self._ep_length_local[key_fn(fn)]
+        ]
 
     def __len__(self):
         return len(self.file_names)

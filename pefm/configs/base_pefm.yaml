@@ -73,7 +73,7 @@ model:
   ac_mode: ${env.args.ac_mode}
   use_torch_compile: false
   rotation_aware_norm: true   # coupled X,Y dims share scale for rotation-correct normalization
-  canonicalize: false    # scale/translation canonicalization (set true for new training)
+  canonicalize: true    # scale/translation canonicalization (standard practice, fair vs EquiBot)
 
   # PEFM symmetry selector
   symmetry:

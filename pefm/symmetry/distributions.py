@@ -54,13 +54,18 @@ class ProjectedNormalSO2(nn.Module):
         Approximate entropy of the projected normal distribution on S^1.
 
         params: (B, 4)
-        Returns: (B,)
+        Returns: (B,) bounded above by log(2*pi).
 
-        Uses the approximation:
-            H ~ log(2*pi) + mean(log(sigma)) - 0.5 * ||mu/sigma||^2
-        When sigma is large relative to ||mu||, distribution is near-uniform
+        Uses the bounded approximation:
+            H ~ log(2*pi) - 0.5 * ||mu/sigma||^2
+        When ||mu||/sigma is small, distribution is near-uniform
         and entropy approaches log(2*pi) ~ 1.838.
-        When sigma is small, distribution concentrates and entropy decreases.
+        When ||mu||/sigma is large, distribution concentrates
+        and entropy decreases (lower bounded by 0 via clamp).
+
+        Note: previous version included +log(sigma) which let entropy
+        grow unboundedly with sigma, allowing the selector to game the
+        regularizer. This bounded form preserves the regularization signal.
         """
         mu = params[:, :2]  # (B, 2)
         log_sigma = params[:, 2:].clamp(-4.0, 4.0)  # (B, 2)
@@ -69,9 +74,7 @@ class ProjectedNormalSO2(nn.Module):
         # Concentration: how peaked the distribution is
         concentration_sq = (mu / sigma).pow(2).sum(dim=-1).clamp(max=100.0)  # (B,)
 
-        # Entropy approximation
-        H = math.log(2 * math.pi) + log_sigma.mean(dim=-1) - 0.5 * concentration_sq
-
+        H = (math.log(2 * math.pi) - 0.5 * concentration_sq).clamp(min=0.0)
         return H
 
     def log_prob(self, params, angles):

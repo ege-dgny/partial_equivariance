@@ -6,6 +6,7 @@ Each group defines how to transform point clouds, EEF states, and actions.
 """
 
 from abc import ABC, abstractmethod
+import math
 import torch
 import torch.nn.functional as F
 import numpy as np
@@ -205,9 +206,16 @@ class C4(LieGroup):
         return (4 - g) % 4
 
     def _idx_to_angle(self, g_idx):
-        """Convert integer indices to angles."""
-        angles = self.ANGLES.to(g_idx.device)
-        return angles[g_idx.long()]
+        """
+        Convert (possibly differentiable) class index to angle.
+
+        g_idx is a float tensor with values in {0, 1, 2, 3} in forward
+        (via Gumbel-Softmax straight-through). Computing angle = idx * (pi/2)
+        preserves gradient flow back through the Gumbel-Softmax weights into
+        the selector logits. The previous implementation cast .long() before
+        indexing, which silently zeroed out gradients to the C4 selector.
+        """
+        return g_idx * (math.pi / 2.0)
 
     def transform_points(self, g, points):
         angles = self._idx_to_angle(g)

@@ -159,9 +159,12 @@ class PEFMAgent(object):
                     xyz = xyz[choice, :]
                     xyzs[-1].append(xyz)
                 else:
-                    step = xyz.shape[0] // self.num_points
-                    xyz = xyz[::step, :][: self.num_points]
-                    xyzs[-1].append(xyz)
+                    # Match training-time random sampling for consistency;
+                    # avoids divide-by-zero when xyz.shape[0] < num_points.
+                    choice = np.random.choice(
+                        xyz.shape[0], self.num_points, replace=True
+                    )
+                    xyzs[-1].append(xyz[choice, :])
 
         if len(forward_idxs) > 0:
             torch_obs = dict(
