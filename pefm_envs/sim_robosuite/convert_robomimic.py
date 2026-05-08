@@ -57,6 +57,15 @@ TASK_MAP = {
     },
 }
 
+# Body-name keywords (case-insensitive substring match) for the "relevant
+# objects" segmentation per EquiBot paper §3.1. Keep the set tight so the
+# encoder centroid/scale anchor to objects, not table/walls.
+TASK_OBJECT_KEYWORDS = {
+    "can":       ["can"],                 # PickPlaceCan: Can_main + Can_g*
+    "square":    ["squarenut", "peg1"],   # NutAssemblySquare: square nut + square peg
+    "tool_hang": ["tool", "frame"],       # ToolHang: tool_main + frame_main
+}
+
 # robomimic v0.1 download URLs (Stanford)
 DOWNLOAD_URLS = {
     "can": "http://downloads.cs.stanford.edu/downloads/rt_benchmark/v0.1/can/ph/low_dim.hdf5",
@@ -143,6 +152,35 @@ def _get_robot_geom_ids(sim) -> set[int]:
     return robot_geom_ids
 
 
+def _get_object_geom_ids(sim, body_keywords, verbose: bool = False) -> set[int]:
+    """Get geom IDs whose body name contains any of the given keywords.
+
+    Used to keep object-only point clouds (paper §3.1: "point clouds of
+    relevant objects"). Without this filter the encoder centroid/scale
+    anchor to table+walls and SIM(3) canonicalization breaks.
+
+    Mirrors `_get_robot_geom_ids` substring-matching pattern.
+    """
+    body_keywords = [kw.lower() for kw in body_keywords]
+    obj_geom_ids: set[int] = set()
+    matched_bodies: list[str] = []
+    for body_id in range(sim.model.nbody):
+        name = sim.model.body_id2name(body_id)
+        if not name:
+            continue
+        lname = name.lower()
+        if any(kw in lname for kw in body_keywords):
+            geom_start = sim.model.body_geomadr[body_id]
+            geom_count = sim.model.body_geomnum[body_id]
+            for g in range(geom_start, geom_start + geom_count):
+                obj_geom_ids.add(g)
+            matched_bodies.append(name)
+    if verbose:
+        print(f"[object-seg] keywords={body_keywords} -> matched bodies: {matched_bodies}")
+        print(f"[object-seg] total object geoms: {len(obj_geom_ids)}")
+    return obj_geom_ids
+
+
 def extract_point_cloud(
     sim,
     depth: np.ndarray,
@@ -152,6 +190,7 @@ def extract_point_cloud(
     camera_width: int = 240,
     num_points: int = 4096,
     rng: np.random.RandomState | None = None,
+    object_geom_ids: set[int] | None = None,
 ) -> np.ndarray:
     """Extract world-frame point cloud using robosuite's camera utilities.
 
@@ -159,7 +198,10 @@ def extract_point_cloud(
     and get_camera_extrinsic_matrix for correct depth linearization
     and camera-to-world transforms.
 
-    Excludes robot geoms via segmentation (element = geom ID).
+    If `object_geom_ids` is given, KEEPS only those geoms (paper-faithful,
+    "point clouds of relevant objects"). Otherwise falls back to dropping
+    robot geoms only (legacy behavior, full scene minus robot).
+
     Filters by workspace bounds.
     Returns (num_points, 3) padded/subsampled.
     """
@@ -193,14 +235,21 @@ def extract_point_cloud(
     fx, fy = intrinsic[0, 0], intrinsic[1, 1]
     cx, cy = intrinsic[0, 2], intrinsic[1, 2]
 
-    # Exclude robot geoms (seg uses geom IDs, not body IDs)
-    robot_geom_ids = _get_robot_geom_ids(sim)
-
-    valid_mask = (
-        ~np.isin(seg, list(robot_geom_ids))
-        & (z_metric > 0.1)
-        & (z_metric < 5.0)
-    )
+    # Segmentation mask: prefer object-only (paper §3.1) when object_geom_ids
+    # is provided; otherwise legacy behavior (drop robot only).
+    if object_geom_ids is not None:
+        valid_mask = (
+            np.isin(seg, list(object_geom_ids))
+            & (z_metric > 0.1)
+            & (z_metric < 5.0)
+        )
+    else:
+        robot_geom_ids = _get_robot_geom_ids(sim)
+        valid_mask = (
+            ~np.isin(seg, list(robot_geom_ids))
+            & (z_metric > 0.1)
+            & (z_metric < 5.0)
+        )
 
     if not valid_mask.any():
         return np.zeros((num_points, 3), dtype=np.float32)
@@ -330,6 +379,19 @@ def convert_hdf5(
     print(f"Creating robosuite env for replay ...")
     env = create_replay_env(env_name, render_res=render_res, control_freq=freq)
 
+    # Object-only segmentation (paper §3.1). Computed once per env.
+    object_keywords = TASK_OBJECT_KEYWORDS.get(task)
+    if object_keywords is None:
+        print(f"[object-seg] WARNING: no keywords for task={task}, falling back to ~robot mask")
+        object_geom_ids = None
+    else:
+        object_geom_ids = _get_object_geom_ids(env.sim, object_keywords, verbose=True)
+        if not object_geom_ids:
+            raise RuntimeError(
+                f"No object geoms matched for task={task} keywords={object_keywords}. "
+                f"Inspect sim.model.body_id2name(...) to fix the keyword list."
+            )
+
     rng = np.random.RandomState(0)
 
     for ep_idx, demo_key in enumerate(demos):
@@ -392,6 +454,7 @@ def convert_hdf5(
                 camera_width=render_res,
                 num_points=num_points,
                 rng=rng,
+                object_geom_ids=object_geom_ids,
             )
 
             # Action conversion
