@@ -57,13 +57,16 @@ TASK_MAP = {
     },
 }
 
-# Body-name keywords (case-insensitive substring match) for the "relevant
-# objects" segmentation per EquiBot paper §3.1. Keep the set tight so the
-# encoder centroid/scale anchor to objects, not table/walls.
-TASK_OBJECT_KEYWORDS = {
-    "can":       ["can"],                 # PickPlaceCan: Can_main + Can_g*
-    "square":    ["squarenut", "peg1"],   # NutAssemblySquare: square nut + square peg
-    "tool_hang": ["tool", "frame"],       # ToolHang: tool_main + frame_main
+# Per-task receptacle body names that aren't surfaced as Python attributes
+# on the robosuite env. Manipulated objects come from env.objects / env.nuts
+# / env.tool etc. (see resolve_object_body_names below). This dict only
+# names the receptacles/targets that the policy needs to see for placement
+# but that robosuite stores as raw bodies in the model rather than as
+# Python-side object instances.
+TASK_RECEPTACLE_BODIES = {
+    "can":       ["bin1", "bin2"],   # source + target bins
+    "square":    ["peg1"],            # square peg only (peg2 = round, excluded)
+    "tool_hang": [],                  # frame + stand are env attributes -> handled below
 }
 
 # robomimic v0.1 download URLs (Stanford)
@@ -152,32 +155,104 @@ def _get_robot_geom_ids(sim) -> set[int]:
     return robot_geom_ids
 
 
-def _get_object_geom_ids(sim, body_keywords, verbose: bool = False) -> set[int]:
-    """Get geom IDs whose body name contains any of the given keywords.
+def resolve_object_body_names(env, task: str) -> list[str]:
+    """Resolve which robosuite bodies count as 'relevant objects' for the
+    paper-style segmentation (EquiBot §3.1: "point clouds of relevant objects").
 
-    Used to keep object-only point clouds (paper §3.1: "point clouds of
-    relevant objects"). Without this filter the encoder centroid/scale
-    anchor to table+walls and SIM(3) canonicalization breaks.
+    Mirrors sim_mobile's design: the env declares its objects, the converter
+    trusts the env. Where robosuite exposes object instances as Python
+    attributes (env.objects / env.nuts / env.tool / env.frame / env.stand),
+    we read them directly. Where it doesn't (bins, square peg), we list
+    body names explicitly via TASK_RECEPTACLE_BODIES.
 
-    Mirrors `_get_robot_geom_ids` substring-matching pattern.
+    Subtask filtering: PickPlaceCan loads all 4 PickPlace objects and
+    NutAssemblySquare loads both nuts. We keep only the manipulated object
+    of the subtask; the others are clutter.
     """
-    body_keywords = [kw.lower() for kw in body_keywords]
+    names: list[str] = []
+    if task == "can":
+        for obj in getattr(env, "objects", []):
+            if "can" in obj.root_body.lower():
+                names.append(obj.root_body)
+    elif task == "square":
+        for nut in getattr(env, "nuts", []):
+            if "square" in nut.root_body.lower():
+                names.append(nut.root_body)
+    elif task == "tool_hang":
+        for attr in ("tool", "frame", "stand"):
+            obj = getattr(env, attr, None)
+            if obj is not None and hasattr(obj, "root_body"):
+                names.append(obj.root_body)
+    else:
+        raise KeyError(f"Unknown task: {task}")
+
+    # Per-task receptacles (not surfaced as Python attributes)
+    names.extend(TASK_RECEPTACLE_BODIES.get(task, []))
+
+    if not names:
+        raise RuntimeError(
+            f"No object bodies resolved for task={task}. "
+            f"Inspect env.objects / env.nuts / TASK_RECEPTACLE_BODIES."
+        )
+    return names
+
+
+def _get_object_geom_ids(sim, body_names, verbose: bool = False) -> set[int]:
+    """Expand a list of MuJoCo body names into geom IDs, recursively.
+
+    Strict equality on body name -- no substring matching. Body names are
+    authoritative (came from env attributes or the per-task receptacle list).
+
+    Recurses through every descendant body so composite objects (e.g.
+    ToolHang's tool_root, whose geoms live on child bodies) are captured.
+    """
+    name_to_id = {sim.model.body_id2name(i): i for i in range(sim.model.nbody)}
+    parent_of = sim.model.body_parentid  # array, parent_of[i] = parent body id
+
+    # Build children adjacency once.
+    children: dict[int, list[int]] = {}
+    for i in range(sim.model.nbody):
+        children.setdefault(parent_of[i], []).append(i)
+
+    def descendants(root_id: int) -> list[int]:
+        """All bodies under root (inclusive). Stops at body 0 self-loop."""
+        stack = [root_id]
+        out = []
+        while stack:
+            b = stack.pop()
+            out.append(b)
+            stack.extend(c for c in children.get(b, []) if c != b)
+        return out
+
     obj_geom_ids: set[int] = set()
-    matched_bodies: list[str] = []
-    for body_id in range(sim.model.nbody):
-        name = sim.model.body_id2name(body_id)
-        if not name:
+    matched: list[str] = []
+    missing: list[str] = []
+    for name in body_names:
+        bid = name_to_id.get(name)
+        if bid is None:
+            missing.append(name)
             continue
-        lname = name.lower()
-        if any(kw in lname for kw in body_keywords):
-            geom_start = sim.model.body_geomadr[body_id]
-            geom_count = sim.model.body_geomnum[body_id]
-            for g in range(geom_start, geom_start + geom_count):
+        n_geoms_before = len(obj_geom_ids)
+        for db in descendants(bid):
+            gstart = sim.model.body_geomadr[db]
+            gcount = sim.model.body_geomnum[db]
+            for g in range(gstart, gstart + gcount):
                 obj_geom_ids.add(g)
-            matched_bodies.append(name)
+        matched.append(f"{name}({len(obj_geom_ids) - n_geoms_before}g)")
     if verbose:
-        print(f"[object-seg] keywords={body_keywords} -> matched bodies: {matched_bodies}")
+        print(f"[object-seg] matched bodies: {matched}")
+        if missing:
+            print(f"[object-seg] WARNING missing bodies: {missing}")
         print(f"[object-seg] total object geoms: {len(obj_geom_ids)}")
+    if missing:
+        raise RuntimeError(
+            f"Bodies not found in MuJoCo model: {missing}. "
+            f"Available body names: {sorted(name_to_id.keys())}"
+        )
+    if not obj_geom_ids:
+        raise RuntimeError(
+            f"No geoms resolved from body names {body_names} (incl. descendants)."
+        )
     return obj_geom_ids
 
 
@@ -380,17 +455,21 @@ def convert_hdf5(
     env = create_replay_env(env_name, render_res=render_res, control_freq=freq)
 
     # Object-only segmentation (paper §3.1). Computed once per env.
-    object_keywords = TASK_OBJECT_KEYWORDS.get(task)
-    if object_keywords is None:
-        print(f"[object-seg] WARNING: no keywords for task={task}, falling back to ~robot mask")
-        object_geom_ids = None
-    else:
-        object_geom_ids = _get_object_geom_ids(env.sim, object_keywords, verbose=True)
-        if not object_geom_ids:
-            raise RuntimeError(
-                f"No object geoms matched for task={task} keywords={object_keywords}. "
-                f"Inspect sim.model.body_id2name(...) to fix the keyword list."
-            )
+    # Mirrors EquiBot sim_mobile's pattern: env declares its objects, we
+    # trust the env. Body names come from authoritative env attributes
+    # (env.objects / env.nuts / env.tool / env.frame / env.stand) plus
+    # explicit per-task receptacle names (bins, peg1).
+    object_body_names = resolve_object_body_names(env, task)
+    print(f"[object-seg] resolved object bodies for task={task}: {object_body_names}")
+    object_geom_ids = _get_object_geom_ids(env.sim, object_body_names, verbose=True)
+
+    # Renderer warmup: two consecutive env.reset() calls. A freshly
+    # created robosuite env has a fragile initial render state; the FIRST
+    # reset triggers the renderer's lazy init and the SECOND moves it to
+    # the stable state. Caught in bisect: with one reset only, demo 0
+    # loses ~99% of its frames. With two, all demos are clean.
+    env.reset()
+    env.reset()
 
     rng = np.random.RandomState(0)
 
@@ -417,35 +496,26 @@ def convert_hdf5(
             env.sim.set_state_from_flattened(states[t])
             env.sim.forward()
 
-            # Render directly via sim.render() — _get_observations() caches
-            # stale images and does NOT re-render after set_state_from_flattened
-            rgb = env.sim.render(
-                camera_name="agentview",
-                width=render_res, height=render_res,
-            )[::-1].copy()
-
-            depth_raw = env.sim.render(
-                camera_name="agentview",
-                width=render_res, height=render_res,
-                depth=True,
-            )
-            if isinstance(depth_raw, tuple):
-                _, depth_map = depth_raw
-            else:
-                depth_map = depth_raw
-
-            seg_raw = env.sim.render(
-                camera_name="agentview",
-                width=render_res, height=render_res,
-                segmentation=True,
-            )
-            if isinstance(seg_raw, tuple):
-                _, seg_map = seg_raw
-            else:
-                seg_map = seg_raw
-            # segmentation returns (H, W, 2): [body_id, geom_id]
-            if seg_map.ndim == 3 and seg_map.shape[2] == 2:
-                seg_map = seg_map[:, :, 1]  # use geom IDs
+            # Render via _get_observations(force_update=True). Multiple
+            # consecutive sim.render(...) calls (rgb / depth / segmentation)
+            # corrupt MuJoCo's internal scene cache after the first frame.
+            # _get_observations produces all three buffers in one pass.
+            #
+            # IMPORTANT: copy() each buffer before downstream ops. The returned
+            # arrays are views into MuJoCo's internal pixel buffers; passing
+            # them through numpy ops without copying corrupts the buffer and
+            # makes ALL subsequent renders return empty seg masks. Caught in
+            # bisect: with copy() seg.overlap stays at 6 across frames; without
+            # copy() it drops to 0 from t=1 onward.
+            obs_dict = env._get_observations(force_update=True)
+            rgb       = obs_dict["agentview_image"].copy()
+            depth_map = obs_dict["agentview_depth"][:, :, 0].copy()
+            seg_map   = obs_dict["agentview_segmentation_element"][:, :, 0].copy()
+            # Pull frontview HERE, BEFORE extract_point_cloud. Reading
+            # frontview after extract_point_cloud puts the renderer in a
+            # state where ~85% of subsequent agentview seg masks come back
+            # empty. Reading both cameras up front avoids that.
+            side_img = obs_dict["frontview_image"].copy()
 
             pc = extract_point_cloud(
                 env.sim, depth_map, seg_map,
@@ -482,16 +552,21 @@ def convert_hdf5(
                 eef_pos=eef_obs,
             )
 
-            # Video frame (dual view)
+            # Video frame (dual view): side_img was already copied from
+            # obs_dict above (must happen before extract_point_cloud).
             front_img = rgb
-            side_img = env.sim.render(
-                camera_name="frontview",
-                width=render_res, height=render_res,
-            )[::-1].copy()
             dual = np.concatenate([front_img, side_img], axis=1)
             vid_frames.append(dual)
 
             frame_count += 1
+
+            # Reading sim.data.cam_xpos / cam_xmat inside extract_point_cloud
+            # leaves MuJoCo's lazily-computed kinematics in a state that the
+            # next set_state_from_flattened doesn't fully refresh, which
+            # corrupts the segmentation buffer for subsequent frames. A
+            # trailing forward() forces a clean recompute. Caught in bisect:
+            # without this call only every other frame produces a valid PC.
+            env.sim.forward()
 
         # Save video
         if vid_frames and cv2 is not None:
