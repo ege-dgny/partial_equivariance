@@ -151,6 +151,41 @@ class RobosuiteBaseEnv:
                 ids.append(i)
         return ids
 
+    # robosuite env name -> pefm task key (matches convert_robomimic.TASK_MAP)
+    _ROBOSUITE_TO_PEFM_TASK = {
+        "PickPlaceCan":      "can",
+        "NutAssemblySquare": "square",
+        "ToolHang":          "tool_hang",
+    }
+
+    @property
+    def _pefm_task_name(self) -> str | None:
+        return self._ROBOSUITE_TO_PEFM_TASK.get(self.robosuite_env_name)
+
+    def _get_object_geom_ids_cached(self) -> set[int]:
+        """Object-only geom IDs for the paper-style segmentation at eval.
+
+        Must match the converter's segmentation rule. Cached per env so we
+        only walk the MuJoCo body tree once.
+        """
+        cached = getattr(self, "_object_geom_ids", None)
+        if cached is not None:
+            return cached
+        task = self._pefm_task_name
+        if task is None:
+            self._object_geom_ids = set()
+            return self._object_geom_ids
+        # Lazy import to avoid pulling h5py / cv2 just to construct an env.
+        from pefm_envs.sim_robosuite.convert_robomimic import (
+            resolve_object_body_names,
+            _get_object_geom_ids,
+        )
+        body_names = resolve_object_body_names(self.env, task)
+        self._object_geom_ids = _get_object_geom_ids(
+            self.env.sim, body_names, verbose=False
+        )
+        return self._object_geom_ids
+
     def compute_reward(self) -> float:
         return float(self.env.reward())
 
@@ -286,21 +321,33 @@ class RobosuiteBaseEnv:
         fx, fy = intrinsic[0, 0], intrinsic[1, 1]
         cx, cy = intrinsic[0, 2], intrinsic[1, 2]
 
-        # Exclude robot geoms (seg uses geom IDs, not body IDs)
-        skip_kw = {"robot", "gripper", "mount", "base", "fixed_mount"}
-        robot_geom_ids = set()
-        for body_id in range(sim.model.nbody):
-            name = sim.model.body_id2name(body_id)
-            if name and any(s in name.lower() for s in skip_kw):
-                gs = sim.model.body_geomadr[body_id]
-                gn = sim.model.body_geomnum[body_id]
-                robot_geom_ids.update(range(gs, gs + gn))
-
-        valid_mask = (
-            ~np.isin(seg, list(robot_geom_ids))
-            & (z_metric > 0.1)
-            & (z_metric < 5.0)
-        )
+        # Paper-style object-only segmentation (EquiBot §3.1). Must match
+        # the converter's rule exactly, otherwise the policy sees an
+        # out-of-distribution PC at eval (training: nut+peg only; eval:
+        # table+walls+bins+nut+peg = catastrophic mismatch).
+        object_geom_ids = self._get_object_geom_ids_cached()
+        if object_geom_ids:
+            valid_mask = (
+                np.isin(seg, list(object_geom_ids))
+                & (z_metric > 0.1)
+                & (z_metric < 5.0)
+            )
+        else:
+            # Fallback: legacy scene-minus-robot mask (for envs without a
+            # registered pefm task name; should not trigger for robomimic).
+            skip_kw = {"robot", "gripper", "mount", "base", "fixed_mount"}
+            robot_geom_ids = set()
+            for body_id in range(sim.model.nbody):
+                name = sim.model.body_id2name(body_id)
+                if name and any(s in name.lower() for s in skip_kw):
+                    gs = sim.model.body_geomadr[body_id]
+                    gn = sim.model.body_geomnum[body_id]
+                    robot_geom_ids.update(range(gs, gs + gn))
+            valid_mask = (
+                ~np.isin(seg, list(robot_geom_ids))
+                & (z_metric > 0.1)
+                & (z_metric < 5.0)
+            )
 
         if not valid_mask.any():
             return np.zeros((0, 3), dtype=np.float32)
