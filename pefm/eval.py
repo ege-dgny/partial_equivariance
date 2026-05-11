@@ -66,7 +66,6 @@ def run_eval(
         for i in range(obs_horizon):
             obs_history.append(obs)
         images[-1].append(rgb_render["images"][0][..., :3])
-        grip_state = float(np.array(obs["state"])[..., -1].reshape(-1)[0])
 
         if ep_ix == 0:
             sample_pc = render["pc"]
@@ -112,12 +111,6 @@ def run_eval(
                     ac_dict = None
                     break
                 agent_ac = ac[ac_ix] if len(ac.shape) > 1 else ac
-                agent_ac = np.array(agent_ac, copy=True)
-                if agent_ac[0] > 0.9:
-                    grip_state = 1.0
-                elif agent_ac[0] < 0.1:
-                    grip_state = 0.0
-                agent_ac[0] = grip_state
                 state, rew, done, info = env.step(agent_ac, dummy_reward=True)
                 if hasattr(env, "visualize_eef_frame"):
                     env.visualize_eef_frame(state)
