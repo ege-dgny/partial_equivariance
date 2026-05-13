@@ -34,7 +34,7 @@ class ProjectedNormalSO2(nn.Module):
         Returns: (B, N) angles in [0, 2*pi)
         """
         mu = params[:, :2]  # (B, 2)
-        log_sigma = params[:, 2:].clamp(-4.0, 4.0)  # (B, 2)
+        log_sigma = params[:, 2:].clamp(-4, 4)  # (B, 2)
         sigma = torch.exp(log_sigma)
 
         B = params.shape[0]
@@ -54,24 +54,24 @@ class ProjectedNormalSO2(nn.Module):
         Approximate entropy of the projected normal distribution on S^1.
 
         params: (B, 4)
-        Returns: (B,) bounded above by log(2*pi).
+        Returns: (B,)
 
-        Paper Eq. 14:
-            H approx log(2*pi) + 1/2*(log sigma_u + log sigma_v) - 1/2*(mu_u^2/sigma_u^2 + mu_v^2/sigma_v^2)
-
-        The +log(sigma) term gives gradient of +0.5 w.r.t. each log_sigma,
-        continuously pushing for larger sigma (more uniform distribution).
-        Without it, gradient vanishes near uniform and selector can slowly
-        collapse for symmetric tasks, degrading performance over training.
+        Uses the approximation:
+            H ~ log(2*pi) + mean(log(sigma)) - 0.5 * ||mu/sigma||^2
+        When sigma is large relative to ||mu||, distribution is near-uniform
+        and entropy approaches log(2*pi) ~ 1.838.
+        When sigma is small, distribution concentrates and entropy decreases.
         """
         mu = params[:, :2]  # (B, 2)
-        log_sigma = params[:, 2:].clamp(-4.0, 4.0)  # (B, 2)
+        log_sigma = params[:, 2:].clamp(-4, 4)  # (B, 2)
         sigma = torch.exp(log_sigma)
 
-        log_sigma_sum = log_sigma.sum(dim=-1)  # (B,)
+        # Concentration: how peaked the distribution is
         concentration_sq = (mu / sigma).pow(2).sum(dim=-1)  # (B,)
 
-        H = math.log(2 * math.pi) + 0.5 * log_sigma_sum - 0.5 * concentration_sq
+        # Entropy approximation
+        H = math.log(2 * math.pi) + log_sigma.mean(dim=-1) - 0.5 * concentration_sq
+
         return H
 
     def log_prob(self, params, angles):
@@ -82,7 +82,7 @@ class ProjectedNormalSO2(nn.Module):
         Returns: (B, N)
         """
         mu = params[:, :2]  # (B, 2)
-        log_sigma = params[:, 2:]  # (B, 2)
+        log_sigma = params[:, 2:].clamp(-4, 4)  # (B, 2)
         sigma = torch.exp(log_sigma)
 
         # Convert angles to unit vectors

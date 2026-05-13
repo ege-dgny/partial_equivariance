@@ -74,11 +74,6 @@ class BaseDataset(Dataset):
             for fn in self.file_names
             if ep_length_dict[key_fn(fn)] >= self.min_demo_length
         ]
-
-        # Save the offset/length lookups (still needed by the filter applied
-        # AFTER _init_cache below).
-        self._ep_t_offset_local = ep_t_offset_dict
-        self._ep_length_local = ep_length_dict
         ep_t_offset_dict = {
             k: v
             for k, v in ep_t_offset_dict.items()
@@ -94,12 +89,6 @@ class BaseDataset(Dataset):
             self.use_four_digit_time = False
 
         self._init_cache()
-
-        # NOTE: __getitem__ already clips ep_t_list via np.clip to repeat the
-        # last frame for out-of-range tail indices ("task complete, stay put").
-        # The previous pred_horizon filter here removed all tail frames, which
-        # killed 46% of fold data (35-step eps, pred_horizon=16) including the
-        # goal-completion examples. Match EquiBot dataset.py: keep all frames.
 
     def __len__(self):
         return len(self.file_names)

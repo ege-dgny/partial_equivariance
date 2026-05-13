@@ -77,10 +77,7 @@ class RotationAwareNormalizer(object):
 
         dmin = data.min(0)[0].detach()
         dmax = data.max(0)[0].detach()
-        # Use 1.0 for constant dims (range=0) to avoid division by ~0;
-        # keep actual range for non-constant dims
-        raw_range = dmax - dmin
-        scale = torch.where(raw_range < 1e-6, torch.ones_like(raw_range), raw_range)
+        scale = (dmax - dmin).clamp(min=1e-12)
 
         for group in coupled_groups:
             max_range = scale[group].max()
@@ -94,7 +91,7 @@ class RotationAwareNormalizer(object):
         target_shape = (1,) * (nd - 1) + (data.shape[-1],)
         center = self.stats["center"].reshape(target_shape)
         scale = self.stats["scale"].reshape(target_shape)
-        return (data - center) / scale
+        return (data - center) / scale.clamp(min=1e-3)
 
     def unnormalize(self, data):
         nd = len(data.shape)

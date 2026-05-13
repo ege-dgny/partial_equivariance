@@ -169,10 +169,16 @@ class PEFMPolicy(nn.Module):
         scale = scale.clamp(min=1e-6)
         pc_canon = pc_canon / scale[:, None, None, None]
 
-        # Canonicalize state position (indices 0:3 per EEF only)
+        # Canonicalize state position
         state_canon = state.clone()
         s = state_canon.view(B, self.obs_horizon, self.num_eef, self.eef_dim)
-        s[..., :3] = (s[..., :3] - centroid[:, None]) / scale[:, None, None, None]
+        if self.eef_dim % 2 == 0 and self.eef_dim != 13:
+            # 2D: all dims are xy pairs, center using centroid[:, :, :2]
+            c2d = centroid[..., :2]  # (B, 1, 2)
+            for i in range(self.eef_dim // 2):
+                s[..., 2*i:2*i+2] = (s[..., 2*i:2*i+2] - c2d[:, None]) / scale[:, None, None, None]
+        else:
+            s[..., :3] = (s[..., :3] - centroid[:, None]) / scale[:, None, None, None]
         state_canon = s.view(B, self.obs_horizon, -1)
 
         return pc_canon, state_canon, centroid, scale
@@ -187,7 +193,13 @@ class PEFMPolicy(nn.Module):
         a = ac.view(B, self.pred_horizon, self.num_eef, self.dof)
         s = scale[:, None, None, None]
 
-        if self.dof >= 4:
+        if self.dof == 2:
+            c2d = centroid[..., :2]  # (B, 1, 2)
+            if self.cfg.model.ac_mode == "abs":
+                a[..., :2] = (a[..., :2] - c2d[:, None]) / s
+            else:
+                a[..., :2] = a[..., :2] / s
+        elif self.dof >= 4:
             # dof=4: [gripper, dx, dy, dz], dof=7: [gripper, dx, dy, dz, drx, dry, drz]
             if self.cfg.model.ac_mode == "abs":
                 a[..., 1:4] = (a[..., 1:4] - centroid[:, None]) / s
@@ -208,7 +220,13 @@ class PEFMPolicy(nn.Module):
         a = ac.view(B, self.pred_horizon, self.num_eef, self.dof)
         s = scale[:, None, None, None]
 
-        if self.dof >= 4:
+        if self.dof == 2:
+            c2d = centroid[..., :2]
+            if self.cfg.model.ac_mode == "abs":
+                a[..., :2] = a[..., :2] * s + c2d[:, None]
+            else:
+                a[..., :2] = a[..., :2] * s
+        elif self.dof >= 4:
             if self.cfg.model.ac_mode == "abs":
                 a[..., 1:4] = a[..., 1:4] * s + centroid[:, None]
             else:
@@ -222,8 +240,7 @@ class PEFMPolicy(nn.Module):
         return ac.view(B, self.pred_horizon, -1)
 
     def _pefm_velocity_batched(
-        self, x_t, t_flat, obs_cond, g_samples, pc, state, encoder_module, vel_module,
-        return_individual=False
+        self, x_t, t_flat, obs_cond, g_samples, pc, state, encoder_module, vel_module
     ):
         """
         Compute PEFM averaged velocity using batched forward pass.
@@ -239,9 +256,8 @@ class PEFMPolicy(nn.Module):
         state: (B, obs_horizon, state_dim) raw states
         encoder_module: encoder to use
         vel_module: velocity_net to use
-        return_individual: if True also return (B, N, H, D) per-sample velocities
 
-        Returns: v_pe (B, H, D) averaged velocity [, v_global (B, N, H, D)]
+        Returns: v_pe (B, H, D) averaged velocity
         """
         B = x_t.shape[0]
         N = g_samples.shape[1]
@@ -312,8 +328,6 @@ class PEFMPolicy(nn.Module):
         # Average over group samples
         v_pe = v_global.mean(dim=1)  # (B, H, D)
 
-        if return_individual:
-            return v_pe, v_global
         return v_pe
 
     def compute_loss(self, pc, state, gt_action):
@@ -355,10 +369,10 @@ class PEFMPolicy(nn.Module):
         t_flat = t.squeeze(-1).squeeze(-1)  # (B,)
         v_pe = self._pefm_velocity_batched(
             x_t, t_flat, obs_cond, g_samples,
-            pc, state, self.encoder, self.velocity_net,
+            pc, state, self.encoder, self.velocity_net
         )
 
-        # 5. Flow matching loss on averaged velocity
+        # 5. Flow matching loss
         loss_flow = F.mse_loss(v_pe, u_t)
 
         # 6. Entropy regularization: -lambda * H encourages high entropy
@@ -406,8 +420,7 @@ class PEFMPolicy(nn.Module):
         # 1. Encode original observation (for selector)
         obs_cond = self._encode_obs(pc, state, ema_nets["encoder"])
 
-        # 2. Sample group elements once; reuse fixed throughout ODE so the
-        # trajectory is deterministic given x_0 and g_samples (consistent frame).
+        # 2. Sample group elements
         with torch.no_grad():
             g_samples, _ = ema_nets["selector"].sample_and_entropy(obs_cond, N)
 
