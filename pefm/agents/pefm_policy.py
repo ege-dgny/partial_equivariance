@@ -402,10 +402,6 @@ class PEFMPolicy(nn.Module):
         # 1. Encode original observation (for selector)
         obs_cond = self._encode_obs(pc, state, ema_nets["encoder"])
 
-        # 2. Sample group elements
-        with torch.no_grad():
-            g_samples, _ = ema_nets["selector"].sample_and_entropy(obs_cond, N)
-
         # 3. Initialize noise
         initial_noise_scale = 0.0 if debug else 1.0
         x0 = (
@@ -413,10 +409,14 @@ class PEFMPolicy(nn.Module):
             * initial_noise_scale
         )
 
-        # 4. ODE integration with PEFM velocity
+        # 4. ODE integration with PEFM velocity.
+        # Resample g_samples at each ODE step so per-g errors cancel across
+        # steps (fixed g_samples would accumulate non-equivariant errors over
+        # all 50 integration steps instead of averaging them out).
         def pefm_velocity(x_t, t):
+            g_samples_t, _ = ema_nets["selector"].sample_and_entropy(obs_cond, N)
             return self._pefm_velocity_batched(
-                x_t, t, obs_cond, g_samples,
+                x_t, t, obs_cond, g_samples_t,
                 pc, state, ema_nets["encoder"], ema_nets["velocity_net"]
             )
 
