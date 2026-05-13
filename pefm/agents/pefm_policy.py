@@ -222,7 +222,8 @@ class PEFMPolicy(nn.Module):
         return ac.view(B, self.pred_horizon, -1)
 
     def _pefm_velocity_batched(
-        self, x_t, t_flat, obs_cond, g_samples, pc, state, encoder_module, vel_module
+        self, x_t, t_flat, obs_cond, g_samples, pc, state, encoder_module, vel_module,
+        return_individual=False
     ):
         """
         Compute PEFM averaged velocity using batched forward pass.
@@ -238,8 +239,9 @@ class PEFMPolicy(nn.Module):
         state: (B, obs_horizon, state_dim) raw states
         encoder_module: encoder to use
         vel_module: velocity_net to use
+        return_individual: if True also return (B, N, H, D) per-sample velocities
 
-        Returns: v_pe (B, H, D) averaged velocity
+        Returns: v_pe (B, H, D) averaged velocity [, v_global (B, N, H, D)]
         """
         B = x_t.shape[0]
         N = g_samples.shape[1]
@@ -310,6 +312,8 @@ class PEFMPolicy(nn.Module):
         # Average over group samples
         v_pe = v_global.mean(dim=1)  # (B, H, D)
 
+        if return_individual:
+            return v_pe, v_global
         return v_pe
 
     def compute_loss(self, pc, state, gt_action):
@@ -349,13 +353,19 @@ class PEFMPolicy(nn.Module):
 
         # 4. PEFM averaged velocity prediction (batched)
         t_flat = t.squeeze(-1).squeeze(-1)  # (B,)
-        v_pe = self._pefm_velocity_batched(
+        v_pe, v_individual = self._pefm_velocity_batched(
             x_t, t_flat, obs_cond, g_samples,
-            pc, state, self.encoder, self.velocity_net
+            pc, state, self.encoder, self.velocity_net,
+            return_individual=True,
         )
 
-        # 5. Flow matching loss
-        loss_flow = F.mse_loss(v_pe, u_t)
+        # 5. Flow matching loss on individual per-g predictions.
+        # ||mean_i(v_i) - u_t||^2 only constrains the average, allowing
+        # non-equivariant individual predictions that cancel on average but
+        # give inconsistent ODE trajectories at eval. Using per-sample loss
+        # mean_i(||v_i - u_t||^2) directly enforces equivariance per g.
+        u_t_exp = u_t.unsqueeze(1).expand_as(v_individual)
+        loss_flow = F.mse_loss(v_individual, u_t_exp)
 
         # 6. Entropy regularization: -lambda * H encourages high entropy
         loss_entropy = -self.entropy_weight * entropy.mean()
