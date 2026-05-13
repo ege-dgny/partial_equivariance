@@ -415,7 +415,7 @@ class PEFMPolicy(nn.Module):
         # 2. Sample group elements once; reuse fixed throughout ODE so the
         # trajectory is deterministic given x_0 and g_samples (consistent frame).
         with torch.no_grad():
-            g_samples, _ = ema_nets[selector].sample_and_entropy(obs_cond, N)
+            g_samples, _ = ema_nets["selector"].sample_and_entropy(obs_cond, N)
 
         # 3. Initialize noise
         initial_noise_scale = 0.0 if debug else 1.0
@@ -428,7 +428,7 @@ class PEFMPolicy(nn.Module):
         def pefm_velocity(x_t, t):
             return self._pefm_velocity_batched(
                 x_t, t, obs_cond, g_samples,
-                pc, state, ema_nets[encoder], ema_nets[velocity_net]
+                pc, state, ema_nets["encoder"], ema_nets["velocity_net"]
             )
 
         predicted_actions = self.ode_solver.solve(pefm_velocity, x0)
