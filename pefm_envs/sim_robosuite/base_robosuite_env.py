@@ -290,7 +290,6 @@ class RobosuiteBaseEnv:
         from robosuite.utils.camera_utils import (
             get_camera_extrinsic_matrix,
             get_camera_intrinsic_matrix,
-            get_real_depth_map,
         )
 
         if obs_dict is None:
@@ -312,8 +311,12 @@ class RobosuiteBaseEnv:
         sim = self.env.sim
         H, W = depth.shape
 
-        # Use robosuite utilities (handles MuJoCo conventions correctly)
-        z_metric = get_real_depth_map(sim, depth)
+        # Linearize depth without robosuite assertion (handles NaN/OOB from 1.5.1)
+        depth = np.clip(np.nan_to_num(depth, nan=0.0, posinf=1.0, neginf=0.0), 0.0, 1.0)
+        extent = sim.model.stat.extent
+        far = sim.model.vis.map.zfar * extent
+        near = sim.model.vis.map.znear * extent
+        z_metric = near / (1.0 - depth * (1.0 - near / far))
         intrinsic = get_camera_intrinsic_matrix(sim, "agentview", H, W)
         extrinsic = get_camera_extrinsic_matrix(sim, "agentview")
         cam2world = np.linalg.inv(extrinsic)
