@@ -353,19 +353,13 @@ class PEFMPolicy(nn.Module):
 
         # 4. PEFM averaged velocity prediction (batched)
         t_flat = t.squeeze(-1).squeeze(-1)  # (B,)
-        v_pe, v_individual = self._pefm_velocity_batched(
+        v_pe = self._pefm_velocity_batched(
             x_t, t_flat, obs_cond, g_samples,
             pc, state, self.encoder, self.velocity_net,
-            return_individual=True,
         )
 
-        # 5. Flow matching loss on individual per-g predictions.
-        # ||mean_i(v_i) - u_t||^2 only constrains the average, allowing
-        # non-equivariant individual predictions that cancel on average but
-        # give inconsistent ODE trajectories at eval. Using per-sample loss
-        # mean_i(||v_i - u_t||^2) directly enforces equivariance per g.
-        u_t_exp = u_t.unsqueeze(1).expand_as(v_individual)
-        loss_flow = F.mse_loss(v_individual, u_t_exp)
+        # 5. Flow matching loss on averaged velocity
+        loss_flow = F.mse_loss(v_pe, u_t)
 
         # 6. Entropy regularization: -lambda * H encourages high entropy
         loss_entropy = -self.entropy_weight * entropy.mean()
