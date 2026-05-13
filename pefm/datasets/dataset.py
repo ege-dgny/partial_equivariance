@@ -95,19 +95,11 @@ class BaseDataset(Dataset):
 
         self._init_cache()
 
-        # Filter near-end frames AFTER cache is built so the cache still
-        # contains the tail files needed when constructing pred_horizon
-        # sequences anchored at earlier frames.
-        def _frame_t(fn):
-            return int(fn.split("/")[-1].split(".")[0].split("_")[-1][1:])
-
-        self.file_names = [
-            fn
-            for fn in self.file_names
-            if (_frame_t(fn) - self._ep_t_offset_local[key_fn(fn)])
-            + self.pred_horizon
-            <= self._ep_length_local[key_fn(fn)]
-        ]
+        # NOTE: __getitem__ already clips ep_t_list via np.clip to repeat the
+        # last frame for out-of-range tail indices ("task complete, stay put").
+        # The previous pred_horizon filter here removed all tail frames, which
+        # killed 46% of fold data (35-step eps, pred_horizon=16) including the
+        # goal-completion examples. Match EquiBot dataset.py: keep all frames.
 
     def __len__(self):
         return len(self.file_names)
