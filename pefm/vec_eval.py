@@ -12,6 +12,23 @@ from pefm.eval import organize_obs
 from pefm.utils.media import combine_videos
 
 
+def _normalize_pc_sizes(obs, num_points):
+    """Subsample each env's PC to exactly num_points so stacking works."""
+    fixed = []
+    for pc in obs["pc"]:
+        n = len(pc)
+        if n == 0:
+            fixed.append(np.zeros((num_points, 3), dtype=np.float32))
+        elif n >= num_points:
+            idx = np.random.choice(n, num_points, replace=False)
+            fixed.append(pc[idx])
+        else:
+            idx = np.random.choice(n, num_points, replace=True)
+            fixed.append(pc[idx])
+    obs["pc"] = fixed
+    return obs
+
+
 def run_eval(
     env,
     agent,
@@ -30,6 +47,8 @@ def run_eval(
         obs_horizon = 1
         ac_horizon = 1
 
+    num_points = getattr(agent, "num_points", 1024)
+
     images = []
     obs_history = []
     num_envs = len(env.remotes)
@@ -41,7 +60,7 @@ def run_eval(
 
     pred_horizon = agent.pred_horizon if hasattr(agent, "pred_horizon") else 1
     rgb_render = render = env.env_method("render")
-    obs = organize_obs(render, rgb_render, state)
+    obs = _normalize_pc_sizes(organize_obs(render, rgb_render, state), num_points)
     for i in range(obs_horizon):
         obs_history.append(obs)
     for i in range(num_envs):
@@ -84,7 +103,7 @@ def run_eval(
             env.step_async(agent_ac, dummy_reward=True)
             state, _, done, _ = env.step_wait()
             rgb_render = render = env.env_method("render")
-            obs = organize_obs(render, rgb_render, state)
+            obs = _normalize_pc_sizes(organize_obs(render, rgb_render, state), num_points)
             obs_history.append(obs)
             if len(obs) > obs_horizon:
                 obs_history = obs_history[-obs_horizon:]
