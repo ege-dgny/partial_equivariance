@@ -11,7 +11,7 @@ env:
     dof: 7
     max_episode_length: 300
     freq: 20
-    randomize_rotation: false   # primary protocol: continuous-yaw to match PH demos
+    randomize_rotation: true
 
 model:
   symmetry:
