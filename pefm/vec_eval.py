@@ -12,23 +12,6 @@ from pefm.eval import organize_obs
 from pefm.utils.media import combine_videos
 
 
-def _normalize_pc_sizes(obs, num_points):
-    """Subsample each env's PC to exactly num_points so stacking works."""
-    fixed = []
-    for pc in obs["pc"]:
-        n = len(pc)
-        if n == 0:
-            fixed.append(np.zeros((num_points, 3), dtype=np.float32))
-        elif n >= num_points:
-            idx = np.random.choice(n, num_points, replace=False)
-            fixed.append(pc[idx])
-        else:
-            idx = np.random.choice(n, num_points, replace=True)
-            fixed.append(pc[idx])
-    obs["pc"] = fixed
-    return obs
-
-
 def run_eval(
     env,
     agent,
@@ -47,8 +30,6 @@ def run_eval(
         obs_horizon = 1
         ac_horizon = 1
 
-    num_points = getattr(agent, "num_points", 1024)
-
     images = []
     obs_history = []
     num_envs = len(env.remotes)
@@ -60,11 +41,16 @@ def run_eval(
 
     pred_horizon = agent.pred_horizon if hasattr(agent, "pred_horizon") else 1
     rgb_render = render = env.env_method("render")
-    obs = _normalize_pc_sizes(organize_obs(render, rgb_render, state), num_points)
+    obs = organize_obs(render, rgb_render, state)
     for i in range(obs_horizon):
         obs_history.append(obs)
     for i in range(num_envs):
         images[i].append(rgb_render[i]["images"][0][..., :3])
+    dof = getattr(agent, "dof", 7)
+    if dof > 2:
+        grip_state = np.array(obs["state"])[..., -1].reshape(num_envs, -1)[:, -1].astype(
+            np.float32
+        )
 
     sample_pc = render[0]["pc"]
     mean_num_points_in_pc = np.mean([len(render[k]["pc"]) for k in range(len(render))])
@@ -87,7 +73,7 @@ def run_eval(
             agent_obs = dict()
             for k in obs.keys():
                 if k == "pc":
-                    agent_obs[k] = [np.stack(o[k]) for o in obs_history[-obs_horizon:]]
+                    agent_obs[k] = [o[k] for o in obs_history[-obs_horizon:]]
                 else:
                     agent_obs[k] = np.stack([o[k] for o in obs_history[-obs_horizon:]])
 
@@ -100,10 +86,17 @@ def run_eval(
 
         for ac_ix in range(ac_horizon):
             agent_ac = ac[:, ac_ix] if len(ac.shape) > 2 else ac
+            agent_ac = np.array(agent_ac, copy=True)
+            if dof > 2:
+                close_mask = agent_ac[:, 0] > 0.9
+                open_mask = agent_ac[:, 0] < 0.1
+                grip_state[close_mask] = 1.0
+                grip_state[open_mask] = 0.0
+                agent_ac[:, 0] = grip_state
             env.step_async(agent_ac, dummy_reward=True)
             state, _, done, _ = env.step_wait()
             rgb_render = render = env.env_method("render")
-            obs = _normalize_pc_sizes(organize_obs(render, rgb_render, state), num_points)
+            obs = organize_obs(render, rgb_render, state)
             obs_history.append(obs)
             if len(obs) > obs_horizon:
                 obs_history = obs_history[-obs_horizon:]
