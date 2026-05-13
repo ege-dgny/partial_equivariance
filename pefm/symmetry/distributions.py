@@ -56,25 +56,22 @@ class ProjectedNormalSO2(nn.Module):
         params: (B, 4)
         Returns: (B,) bounded above by log(2*pi).
 
-        Uses the bounded approximation:
-            H ~ log(2*pi) - 0.5 * ||mu/sigma||^2
-        When ||mu||/sigma is small, distribution is near-uniform
-        and entropy approaches log(2*pi) ~ 1.838.
-        When ||mu||/sigma is large, distribution concentrates
-        and entropy decreases (lower bounded by 0 via clamp).
+        Paper Eq. 14:
+            H approx log(2*pi) + 1/2*(log sigma_u + log sigma_v) - 1/2*(mu_u^2/sigma_u^2 + mu_v^2/sigma_v^2)
 
-        Note: previous version included +log(sigma) which let entropy
-        grow unboundedly with sigma, allowing the selector to game the
-        regularizer. This bounded form preserves the regularization signal.
+        The +log(sigma) term gives gradient of +0.5 w.r.t. each log_sigma,
+        continuously pushing for larger sigma (more uniform distribution).
+        Without it, gradient vanishes near uniform and selector can slowly
+        collapse for symmetric tasks, degrading performance over training.
         """
         mu = params[:, :2]  # (B, 2)
         log_sigma = params[:, 2:].clamp(-4.0, 4.0)  # (B, 2)
         sigma = torch.exp(log_sigma)
 
-        # Concentration: how peaked the distribution is
-        concentration_sq = (mu / sigma).pow(2).sum(dim=-1).clamp(max=100.0)  # (B,)
+        log_sigma_sum = log_sigma.sum(dim=-1)  # (B,)
+        concentration_sq = (mu / sigma).pow(2).sum(dim=-1)  # (B,)
 
-        H = (math.log(2 * math.pi) - 0.5 * concentration_sq).clamp(min=0.0)
+        H = math.log(2 * math.pi) + 0.5 * log_sigma_sum - 0.5 * concentration_sq
         return H
 
     def log_prob(self, params, angles):
