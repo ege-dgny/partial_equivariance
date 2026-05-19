@@ -130,14 +130,15 @@ def main(cfg):
                     },
                     step=global_step,
                 )
-                if "vis_rollout" in eval_metrics:
-                    for eval_idx, eval_video in enumerate(eval_metrics["vis_rollout"]):
-                        video_path = os.path.join(
-                            log_dir,
-                            f"eval{epoch_ix:05d}_ep{eval_idx}_rew{eval_metrics['rew_values'][eval_idx]}.mp4",
-                        )
-                        save_video(eval_video, video_path)
-                        print(f"Saved eval video to {video_path}")
+            if "vis_rollout" in eval_metrics:
+                for eval_idx, eval_video in enumerate(eval_metrics["vis_rollout"]):
+                    rew_val = eval_metrics["rew_values"][eval_idx] if "rew_values" in eval_metrics else 0
+                    video_path = os.path.join(
+                        log_dir,
+                        f"eval{epoch_ix:05d}_ep{eval_idx}_rew{rew_val:.2f}.mp4",
+                    )
+                    save_video(eval_video, video_path)
+                    print(f"Saved eval video to {video_path}")
             del eval_metrics
         if (
             epoch_ix % cfg.training.save_interval == 0
