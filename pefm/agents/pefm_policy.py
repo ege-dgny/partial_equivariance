@@ -325,10 +325,10 @@ class PEFMPolicy(nn.Module):
             v_global_list.append(v_global_i)
         v_global = torch.stack(v_global_list, dim=1)  # (B, N, H, D)
 
-        # Average over group samples
+        # Average over group samples (used for inference)
         v_pe = v_global.mean(dim=1)  # (B, H, D)
 
-        return v_pe
+        return v_pe, v_global  # v_global: (B, N, H, D) for per-sample training loss
 
     def compute_loss(self, pc, state, gt_action):
         """
@@ -365,15 +365,18 @@ class PEFMPolicy(nn.Module):
         x_t = self.ot_cfm.sample_xt(x0, x1, t)
         u_t = self.ot_cfm.target_velocity(x0, x1)
 
-        # 4. PEFM averaged velocity prediction (batched)
+        # 4. PEFM velocity prediction (batched)
         t_flat = t.squeeze(-1).squeeze(-1)  # (B,)
-        v_pe = self._pefm_velocity_batched(
+        v_pe, v_global = self._pefm_velocity_batched(
             x_t, t_flat, obs_cond, g_samples,
             pc, state, self.encoder, self.velocity_net
         )
 
-        # 5. Flow matching loss
-        loss_flow = F.mse_loss(v_pe, u_t)
+        # 5. Per-sample flow matching loss: enforce equivariance on each v_i individually.
+        # Loss on the average v_pe allows opposite-sign errors across samples to cancel
+        # (network learns non-equivariant predictions that average to correct) — at eval
+        # with fixed g_samples those errors surface as random movements.
+        loss_flow = F.mse_loss(v_global, u_t.unsqueeze(1).expand_as(v_global))
 
         # 6. Entropy regularization: -lambda * H encourages high entropy
         loss_entropy = -self.entropy_weight * entropy.mean()
@@ -433,10 +436,11 @@ class PEFMPolicy(nn.Module):
 
         # 4. ODE integration with PEFM velocity
         def pefm_velocity(x_t, t):
-            return self._pefm_velocity_batched(
+            v_pe, _ = self._pefm_velocity_batched(
                 x_t, t, obs_cond, g_samples,
                 pc, state, ema_nets["encoder"], ema_nets["velocity_net"]
             )
+            return v_pe
 
         predicted_actions = self.ode_solver.solve(pefm_velocity, x0)
 
