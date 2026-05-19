@@ -372,11 +372,11 @@ class PEFMPolicy(nn.Module):
             pc, state, self.encoder, self.velocity_net
         )
 
-        # 5. Per-sample flow matching loss: enforce equivariance on each v_i individually.
-        # Loss on the average v_pe allows opposite-sign errors across samples to cancel
-        # (network learns non-equivariant predictions that average to correct) — at eval
-        # with fixed g_samples those errors surface as random movements.
-        loss_flow = F.mse_loss(v_global, u_t.unsqueeze(1).expand_as(v_global))
+        # 5. Averaged flow matching loss (paper Eq. 20): compute v_PE = mean over group
+        # samples, then regress against u_t. This preserves the selector's gradient signal
+        # for world-centric phases — wrong rotations raise the averaged loss and push
+        # p_phi to concentrate toward identity. Per-sample loss removes that signal.
+        loss_flow = F.mse_loss(v_pe, u_t)
 
         # 6. Entropy regularization: -lambda * H encourages high entropy
         loss_entropy = -self.entropy_weight * entropy.mean()

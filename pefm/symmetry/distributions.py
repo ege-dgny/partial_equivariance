@@ -69,8 +69,13 @@ class ProjectedNormalSO2(nn.Module):
         # Concentration: how peaked the distribution is
         concentration_sq = (mu / sigma).pow(2).sum(dim=-1)  # (B,)
 
-        # Entropy approximation
-        H = math.log(2 * math.pi) + log_sigma.mean(dim=-1) - 0.5 * concentration_sq
+        # Entropy approximation for projected normal on S^1.
+        # Capped at log(2*pi) ~1.838 — the true circular entropy upper bound.
+        # Without the cap, the 2D Gaussian differential entropy (log(2*pi)+log_sigma)
+        # grows unboundedly with sigma, causing log_sigma to saturate at the +4 clamp
+        # and reporting spurious H~5.84 instead of the correct ~1.84.
+        H_approx = math.log(2 * math.pi) + log_sigma.mean(dim=-1) - 0.5 * concentration_sq
+        H = H_approx.clamp(max=math.log(2 * math.pi))
 
         return H
 
