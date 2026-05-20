@@ -46,12 +46,6 @@ def run_eval(
         obs_history.append(obs)
     for i in range(num_envs):
         images[i].append(rgb_render[i]["images"][0][..., :3])
-    dof = getattr(agent, "dof", 7)
-    if dof > 2:
-        grip_state = np.array(obs["state"])[..., -1].reshape(num_envs, -1)[:, -1].astype(
-            np.float32
-        )
-
     sample_pc = render[0]["pc"]
     mean_num_points_in_pc = np.mean([len(render[k]["pc"]) for k in range(len(render))])
 
@@ -86,13 +80,6 @@ def run_eval(
 
         for ac_ix in range(ac_horizon):
             agent_ac = ac[:, ac_ix] if len(ac.shape) > 2 else ac
-            agent_ac = np.array(agent_ac, copy=True)
-            if dof > 2:
-                close_mask = agent_ac[:, 0] > 0.9
-                open_mask = agent_ac[:, 0] < 0.1
-                grip_state[close_mask] = 1.0
-                grip_state[open_mask] = 0.0
-                agent_ac[:, 0] = grip_state
             env.step_async(agent_ac, dummy_reward=True)
             state, _, done, _ = env.step_wait()
             rgb_render = render = env.env_method("render")
@@ -120,7 +107,11 @@ def run_eval(
             )
 
     images = np.array(images)
-    metrics = dict(rew=np.mean(rews))
+    metrics = dict(
+        rew=np.mean(rews),
+        success_rate=np.mean(rews >= 0.5),
+        rew_std=np.std(rews),
+    )
     if vis:
         vis_frames = images
         vis_rews = np.zeros_like(vis_frames[:, :, :20])

@@ -1,0 +1,48 @@
+defaults:
+  - base_pefm
+
+env:
+  env_class: can
+  num_eef: 1
+  dof: 7
+  eef_dim: 13
+  args:
+    num_eef: 1
+    dof: 7
+    max_episode_length: 400
+    freq: 20
+    randomize_rotation: false
+    cam_resolution: 256
+    num_points: ${data.dataset.num_points}
+    camera_names: agentview
+    pc_crop_radius: 0.45
+    has_renderer: false
+    reward_shaping: false
+    robots: Panda
+    controller: OSC_POSE
+
+data:
+  dataset:
+    path: /home/hikmet/equibot/data/can/pcs
+    num_points: 256
+    num_demos: 100
+
+training:
+  batch_size: 256
+  num_epochs: 2000
+  lr: 1e-4
+  num_eval_episodes: 150
+  eval_interval: 200
+  save_interval: 50
+
+model:
+  symmetry:
+    group_type: so2
+    distribution_type: projected_normal
+    num_samples: 8
+    num_samples_eval: 16
+    entropy_weight: 0.01
+
+wandb:
+  entity: null
+  project: pefm

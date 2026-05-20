@@ -79,6 +79,12 @@ def get_env_class(env_name):
     elif env_name == "tool_hang":
         from pefm_envs.sim_robosuite.tool_hang import ToolHangEnv
         return ToolHangEnv
+    elif env_name == "can":
+        from equibot.envs.sim_robosuite.can import CanEnv
+        return CanEnv
+    elif env_name == "square":
+        from equibot.envs.sim_robosuite.square import SquareEnv
+        return SquareEnv
     else:
         raise ValueError(f"Environment [{env_name}] not found.")
 
