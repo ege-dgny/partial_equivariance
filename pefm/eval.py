@@ -77,7 +77,7 @@ def run_eval(
         global_features = None
         prev_reward = None
         if log_dir is not None:
-            history = dict(action=[], eef_pos=[])
+            history = dict(action=[], eef_pos=[], entropy=[], selector_params=[])
         while not done:
             if obs_horizon == 1 and reduce_horizon_dim:
                 agent_obs = obs
@@ -108,6 +108,16 @@ def run_eval(
             if log_dir is not None:
                 history["action"].append(ac)
                 history["eef_pos"].append(obs["state"])
+                if (
+                    ac_dict is not None
+                    and isinstance(ac_dict, dict)
+                    and "selector_entropy" in ac_dict
+                ):
+                    history["entropy"].append(float(ac_dict["selector_entropy"]))
+                    history["selector_params"].append(np.asarray(ac_dict["selector_params"]))
+                else:
+                    history["entropy"].append(float("nan"))
+                    history["selector_params"].append(None)
 
             for ac_ix in range(ac_horizon):
                 if len(obs["pc"]) == 0 or len(obs["pc"][0]) == 0:
@@ -163,10 +173,22 @@ def run_eval(
 
         if log_dir is not None:
             os.makedirs(log_dir, exist_ok=True)
+            sp_list = history["selector_params"]
+            valid = [p for p in sp_list if p is not None]
+            if valid:
+                param_dim = valid[0].shape[-1]
+                sp_arr = np.stack([
+                    p if p is not None else np.full(param_dim, np.nan)
+                    for p in sp_list
+                ])
+            else:
+                sp_arr = np.array([])
             np.savez(
                 os.path.join(log_dir, f"eval_ep{ep_ix:02d}_rew{rew:.3f}.npz"),
                 action=np.array(history["action"]),
                 eef_pos=np.array(history["eef_pos"]),
+                entropy=np.array(history["entropy"]),
+                selector_params=sp_arr,
             )
     max_num_images = np.max([len(images[i]) for i in range(len(images))])
     for i in range(len(images)):

@@ -59,7 +59,7 @@ def run_eval(
     if log_dir is not None:
         history = []
         for i in range(num_envs):
-            history.append(dict(action=[], eef_pos=[]))
+            history.append(dict(action=[], eef_pos=[], entropy=[], selector_params=[]))
     t = 0
     pbar = tqdm(
         list(range(env.get("args").max_episode_length // ac_horizon)),
@@ -77,12 +77,19 @@ def run_eval(
                 else:
                     agent_obs[k] = np.stack([o[k] for o in obs_history[-obs_horizon:]])
 
-        ac = agent.act(agent_obs)
+        ac, ac_dict = agent.act(agent_obs, return_dict=True)
 
         if log_dir is not None:
             for i in range(num_envs):
                 history[i]["action"].append(ac[i])
                 history[i]["eef_pos"].append(obs["state"][i])
+                entry = ac_dict[i] if isinstance(ac_dict, list) else ac_dict
+                if entry is not None and "selector_entropy" in entry:
+                    history[i]["entropy"].append(float(entry["selector_entropy"]))
+                    history[i]["selector_params"].append(np.asarray(entry["selector_params"]))
+                else:
+                    history[i]["entropy"].append(float("nan"))
+                    history[i]["selector_params"].append(None)
 
         for ac_ix in range(ac_horizon):
             agent_ac = ac[:, ac_ix] if len(ac.shape) > 2 else ac
@@ -111,13 +118,39 @@ def run_eval(
     if log_dir is not None:
         os.makedirs(log_dir, exist_ok=True)
         for ep_ix in range(num_envs):
+            sp_list = history[ep_ix]["selector_params"]
+            valid = [p for p in sp_list if p is not None]
+            if valid:
+                param_dim = valid[0].shape[-1]
+                sp_arr = np.stack([
+                    p if p is not None else np.full(param_dim, np.nan)
+                    for p in sp_list
+                ])
+            else:
+                sp_arr = np.array([])
             np.savez(
                 os.path.join(
                     log_dir, f"eval_{ckpt_name}_ep{ep_ix:02d}_rew{rews[ep_ix]:.3f}.npz"
                 ),
                 action=np.array(history[ep_ix]["action"]),
                 eef_pos=np.array(history[ep_ix]["eef_pos"]),
+                entropy=np.array(history[ep_ix]["entropy"]),
+                selector_params=sp_arr,
             )
+        if use_wandb:
+            for ep_ix in range(min(4, num_envs)):
+                trace = np.array(history[ep_ix]["entropy"])
+                if np.any(np.isfinite(trace)):
+                    table = wandb.Table(
+                        data=[[t, float(h)] for t, h in enumerate(trace) if np.isfinite(h)],
+                        columns=["timestep", "entropy"],
+                    )
+                    wandb.log({
+                        f"eval/entropy_trace_ep{ep_ix}": wandb.plot.line(
+                            table, "timestep", "entropy",
+                            title=f"H(p_phi) trace - ep{ep_ix} rew={rews[ep_ix]:.2f}",
+                        )
+                    })
 
     images = np.array(images)
     metrics = dict(rew=np.mean(rews))

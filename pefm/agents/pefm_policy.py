@@ -353,8 +353,8 @@ class PEFMPolicy(nn.Module):
         obs_cond = self._encode_obs(pc, state, self.encoder)
 
         # 2. Sample group elements from selector
-        g_samples, entropy = self.selector.sample_and_entropy(
-            obs_cond, self.num_group_samples
+        g_samples, entropy, sel_params = self.selector.sample_and_entropy(
+            obs_cond, self.num_group_samples, return_params=True
         )
 
         # 3. Sample flow matching time and noise
@@ -388,8 +388,24 @@ class PEFMPolicy(nn.Module):
             "loss_flow": loss_flow.item(),
             "loss_entropy": loss_entropy.item(),
             "entropy": entropy.mean().item(),
+            "entropy_std": entropy.std().item(),
             "loss_total": loss_total.item(),
         }
+        with torch.no_grad():
+            if sel_params.shape[-1] == 4:  # SO(2) ProjectedNormal
+                mu = sel_params[:, :2]
+                log_sigma = sel_params[:, 2:].clamp(-4, 4)
+                sigma = log_sigma.exp()
+                metrics["selector/mu_norm"] = mu.norm(dim=-1).mean().item()
+                metrics["selector/sigma_mean"] = sigma.mean().item()
+                metrics["selector/concentration"] = (
+                    (mu / sigma).pow(2).sum(dim=-1).sqrt().mean().item()
+                )
+            else:  # C4 GumbelSoftmaxCategorical
+                probs = torch.softmax(sel_params, dim=-1)
+                metrics["selector/max_prob"] = probs.max(dim=-1)[0].mean().item()
+                if hasattr(self.distribution, "tau"):
+                    metrics["selector/gumbel_tau"] = float(self.distribution.tau)
         if self.canonicalize:
             metrics["canon_scale_mean"] = canon_scale.mean().item()
 
@@ -425,7 +441,9 @@ class PEFMPolicy(nn.Module):
 
         # 2. Sample group elements
         with torch.no_grad():
-            g_samples, _ = ema_nets["selector"].sample_and_entropy(obs_cond, N)
+            g_samples, entropy_eval, sel_params = ema_nets["selector"].sample_and_entropy(
+                obs_cond, N, return_params=True
+            )
 
         # 3. Initialize noise
         initial_noise_scale = 0.0 if debug else 1.0
@@ -450,4 +468,8 @@ class PEFMPolicy(nn.Module):
                 predicted_actions, *canon_params
             )
 
-        return dict(ac=predicted_actions)
+        return dict(
+            ac=predicted_actions,
+            selector_entropy=entropy_eval.detach().cpu().numpy(),   # (B,)
+            selector_params=sel_params.detach().cpu().numpy(),       # (B, param_dim)
+        )
