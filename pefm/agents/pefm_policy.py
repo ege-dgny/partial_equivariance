@@ -352,9 +352,10 @@ class PEFMPolicy(nn.Module):
         # 1. Encode original observation (for selector)
         obs_cond = self._encode_obs(pc, state, self.encoder)
 
-        # 2. Sample group elements from selector
-        g_samples, entropy = self.selector.sample_and_entropy(
-            obs_cond, self.num_group_samples
+        # 2. Sample group elements from selector (also capture raw params for
+        # richer training-time metrics — see metrics dict below).
+        g_samples, entropy, sel_params = self.selector.sample_and_entropy(
+            obs_cond, self.num_group_samples, return_params=True
         )
 
         # 3. Sample flow matching time and noise
@@ -386,7 +387,33 @@ class PEFMPolicy(nn.Module):
             "loss_entropy": loss_entropy.item(),
             "entropy": entropy.mean().item(),
             "loss_total": loss_total.item(),
+            # Phase 2: per-observation entropy variance. If this stays ~0 the
+            # selector has collapsed to a constant — silent failure mode.
+            # Healthy: entropy_std > ~0.3 once the selector starts adapting.
+            "entropy_std": entropy.std().item(),
         }
+
+        # Distribution-shape metrics for the paper's training-dynamics figure.
+        with torch.no_grad():
+            if self.selector.distribution.param_dim == 4:
+                # SO(2) ProjectedNormal: params = [mu_u, mu_v, log_sigma_u, log_sigma_v]
+                mu = sel_params[:, :2]
+                log_sigma = sel_params[:, 2:].clamp(-4, 4)
+                sigma = log_sigma.exp()
+                metrics["selector/mu_norm"] = mu.norm(dim=-1).mean().item()
+                metrics["selector/sigma_mean"] = sigma.mean().item()
+                # Concentration ratio ||mu/sigma||: rises + sigma falls => Dirac collapse.
+                metrics["selector/concentration"] = (
+                    (mu / sigma).pow(2).sum(dim=-1).sqrt().mean().item()
+                )
+            else:
+                # C4 GumbelSoftmaxCategorical: param_dim = num_classes
+                probs = torch.softmax(sel_params, dim=-1)
+                metrics["selector/max_prob"] = probs.max(dim=-1)[0].mean().item()
+                metrics["selector/gumbel_tau"] = float(
+                    self.selector.distribution.tau
+                )
+
         if self.canonicalize:
             metrics["canon_scale_mean"] = canon_scale.mean().item()
 
@@ -420,9 +447,13 @@ class PEFMPolicy(nn.Module):
         # 1. Encode original observation (for selector)
         obs_cond = self._encode_obs(pc, state, ema_nets["encoder"])
 
-        # 2. Sample group elements
+        # 2. Sample group elements (also capture entropy + params for logging)
+        # The selector runs once per control step (outside the ODE loop), so one
+        # entropy value per observation — exactly what the paper figure needs.
         with torch.no_grad():
-            g_samples, _ = ema_nets["selector"].sample_and_entropy(obs_cond, N)
+            g_samples, entropy_eval, sel_params = ema_nets["selector"].sample_and_entropy(
+                obs_cond, N, return_params=True
+            )
 
         # 3. Initialize noise
         initial_noise_scale = 0.0 if debug else 1.0
@@ -446,4 +477,8 @@ class PEFMPolicy(nn.Module):
                 predicted_actions, *canon_params
             )
 
-        return dict(ac=predicted_actions)
+        return dict(
+            ac=predicted_actions,
+            selector_entropy=entropy_eval.detach().cpu().numpy(),   # (B,)
+            selector_params=sel_params.detach().cpu().numpy(),       # (B, param_dim)
+        )

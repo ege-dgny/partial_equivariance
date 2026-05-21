@@ -40,19 +40,23 @@ class SymmetrySelector(nn.Module):
         """
         return self.mlp(z)
 
-    def sample_and_entropy(self, z, num_samples):
+    def sample_and_entropy(self, z, num_samples, return_params=False):
         """
         Sample group elements and compute entropy.
 
         Args:
             z: (B, z_dim) observation conditioning
             num_samples: int N, number of group element samples
+            return_params: if True, also return the raw distribution params
 
         Returns:
             g_samples: (B, N) group elements (angles for SO2, indices for C4)
             entropy: (B,) entropy of the distribution
+            params (optional): (B, param_dim) raw distribution parameters
         """
         params = self.forward(z)
         g_samples = self.distribution.sample(params, num_samples)
         entropy = self.distribution.entropy(params)
+        if return_params:
+            return g_samples, entropy, params
         return g_samples, entropy

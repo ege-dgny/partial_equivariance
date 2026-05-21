@@ -53,7 +53,9 @@ def run_eval(
     if log_dir is not None:
         history = []
         for i in range(num_envs):
-            history.append(dict(action=[], eef_pos=[]))
+            history.append(
+                dict(action=[], eef_pos=[], entropy=[], selector_params=[])
+            )
     t = 0
     pbar = tqdm(
         list(range(env.get("args").max_episode_length // ac_horizon)),
@@ -71,12 +73,24 @@ def run_eval(
                 else:
                     agent_obs[k] = np.stack([o[k] for o in obs_history[-obs_horizon:]])
 
-        ac = agent.act(agent_obs)
+        # Request per-step selector entropy + params (Phase 1.4).
+        # ac_dict is a list[dict|None] of length num_envs; None for invalid PCs.
+        ac, ac_dict = agent.act(agent_obs, return_dict=True)
 
         if log_dir is not None:
             for i in range(num_envs):
                 history[i]["action"].append(ac[i])
                 history[i]["eef_pos"].append(obs["state"][i])
+                entry = ac_dict[i] if i < len(ac_dict) else None
+                if entry is not None and "selector_entropy" in entry:
+                    history[i]["entropy"].append(float(entry["selector_entropy"]))
+                    history[i]["selector_params"].append(
+                        np.asarray(entry["selector_params"])
+                    )
+                else:
+                    history[i]["entropy"].append(float("nan"))
+                    # Use None as placeholder; reconciled at save time.
+                    history[i]["selector_params"].append(None)
 
         for ac_ix in range(ac_horizon):
             agent_ac = ac[:, ac_ix] if len(ac.shape) > 2 else ac
@@ -98,12 +112,28 @@ def run_eval(
     if log_dir is not None:
         os.makedirs(log_dir, exist_ok=True)
         for ep_ix in range(num_envs):
+            # Reconcile selector_params: fill None placeholders with NaN arrays
+            # of the same dim as observed entries (if any), else skip.
+            sp_list = history[ep_ix]["selector_params"]
+            valid = [p for p in sp_list if p is not None]
+            if valid:
+                param_dim = valid[0].shape[-1]
+                sp_arr = np.stack(
+                    [
+                        p if p is not None else np.full(param_dim, np.nan)
+                        for p in sp_list
+                    ]
+                )
+            else:
+                sp_arr = np.array([])
             np.savez(
                 os.path.join(
                     log_dir, f"eval_{ckpt_name}_ep{ep_ix:02d}_rew{rews[ep_ix]:.3f}.npz"
                 ),
                 action=np.array(history[ep_ix]["action"]),
                 eef_pos=np.array(history[ep_ix]["eef_pos"]),
+                entropy=np.array(history[ep_ix]["entropy"]),       # (T,)
+                selector_params=sp_arr,                              # (T, param_dim)
             )
 
     images = np.array(images)
@@ -112,6 +142,26 @@ def run_eval(
         success_rate=np.mean(rews >= 0.5),
         rew_std=np.std(rews),
     )
+
+    # Phase 1.5: W&B line plot of entropy trace for the first 4 episodes.
+    # This is the single most important figure for the partial-equivariance
+    # claim: if H(t) is flat the selector is not observation-conditioned.
+    if use_wandb and log_dir is not None:
+        for ep_ix in range(min(num_envs, 4)):
+            trace = np.array(history[ep_ix]["entropy"]).squeeze()
+            if trace.ndim == 0 or trace.size == 0:
+                continue
+            table = wandb.Table(
+                data=[[int(t), float(h)] for t, h in enumerate(trace)],
+                columns=["timestep", "entropy"],
+            )
+            metrics[f"entropy_trace_ep{ep_ix}"] = wandb.plot.line(
+                table,
+                "timestep",
+                "entropy",
+                title=f"H(p_phi) trace - ep{ep_ix} rew={rews[ep_ix]:.2f}",
+            )
+
     if vis:
         vis_frames = images
         vis_rews = np.zeros_like(vis_frames[:, :, :20])
