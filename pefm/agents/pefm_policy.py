@@ -392,7 +392,7 @@ class PEFMPolicy(nn.Module):
             "loss_total": loss_total.item(),
         }
         with torch.no_grad():
-            if sel_params.shape[-1] == 4:  # SO(2) ProjectedNormal
+            if not hasattr(self.selector.distribution, "tau"):  # SO(2) ProjectedNormal
                 mu = sel_params[:, :2]
                 log_sigma = sel_params[:, 2:].clamp(-4, 4)
                 sigma = log_sigma.exp()
@@ -404,8 +404,7 @@ class PEFMPolicy(nn.Module):
             else:  # C4 GumbelSoftmaxCategorical
                 probs = torch.softmax(sel_params, dim=-1)
                 metrics["selector/max_prob"] = probs.max(dim=-1)[0].mean().item()
-                if hasattr(self.distribution, "tau"):
-                    metrics["selector/gumbel_tau"] = float(self.distribution.tau)
+                metrics["selector/gumbel_tau"] = float(self.selector.distribution.tau)
         if self.canonicalize:
             metrics["canon_scale_mean"] = canon_scale.mean().item()
 
