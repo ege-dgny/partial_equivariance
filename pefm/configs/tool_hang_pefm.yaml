@@ -11,9 +11,32 @@ env:
     dof: 7
     max_episode_length: 700
     freq: 20
-    randomize_rotation: false   # primary protocol: continuous-yaw to match PH demos
+    randomize_rotation: false
+    cam_resolution: 256
+    num_points: ${data.dataset.num_points}
+    camera_names: agentview
+    has_renderer: false
+    reward_shaping: false
+    robots: Panda
+    controller: OSC_POSE
+
+data:
+  dataset:
+    path: /home/ege/pefm/data/tool_hang/pcs
+    num_points: 256
+    num_demos: 50
+    num_workers: 32
+
+training:
+  batch_size: 256
+  num_epochs: 3000
+  lr: 1e-4
+  num_eval_episodes: 8
+  eval_interval: 300
+  save_interval: 100
 
 model:
+  hidden_dim: 128
   symmetry:
     group_type: so2
     distribution_type: projected_normal
@@ -21,7 +44,6 @@ model:
     num_samples_eval: 16
     entropy_weight: 0.01
 
-training:
-  num_epochs: 3000
-  eval_interval: 300
-  save_interval: 100
+wandb:
+  entity: null
+  project: pefm
