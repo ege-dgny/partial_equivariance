@@ -116,8 +116,10 @@ def main(cfg):
                 agent,
                 vis=True,
                 num_episodes=cfg.training.num_eval_episodes,
+                log_dir=log_dir,
                 reduce_horizon_dim=cfg.data.dataset.reduce_horizon_dim,
                 use_wandb=cfg.use_wandb,
+                ckpt_name=f"{epoch_ix:05d}",
             )
             if cfg.use_wandb:
                 if epoch_ix > cfg.training.eval_interval and "vis_pc" in eval_metrics:

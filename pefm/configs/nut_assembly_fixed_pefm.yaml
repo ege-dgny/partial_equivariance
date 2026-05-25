@@ -9,17 +9,43 @@ env:
   args:
     num_eef: 1
     dof: 7
-    max_episode_length: 300
+    max_episode_length: 400
     freq: 20
-    randomize_rotation: true
+    randomize_rotation: false
+    cam_resolution: 256
+    num_points: ${data.dataset.num_points}
+    camera_names: agentview
+    has_renderer: false
+    reward_shaping: false
+    robots: Panda
+    controller: OSC_POSE
+
+data:
+  dataset:
+    path: /home/hikmet/equibot/data/square/pcs
+    num_points: 256
+    num_demos: 100
+
+training:
+  batch_size: 256
+  num_epochs: 2000
+  lr: 1e-4
+  num_eval_episodes: 8
+  eval_interval: 200
+  save_interval: 50
 
 model:
+  hidden_dim: 128
   symmetry:
     group_type: c4
     distribution_type: gumbel_categorical
-    num_samples: 4
-    num_samples_eval: 4
+    num_samples: 8
+    num_samples_eval: 8
     entropy_weight: 0.01
     gumbel_tau: 1.0
     gumbel_tau_min: 0.1
     gumbel_anneal_rate: 0.0003
+
+wandb:
+  entity: null
+  project: pefm
