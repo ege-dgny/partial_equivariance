@@ -82,6 +82,7 @@ class RobosuiteBaseEnv:
         self.dof = getattr(args, "dof", 7)
         self.max_episode_length = args.max_episode_length
         self.rng = rng or np.random.RandomState(getattr(args, "seed", 0))
+        self._env_seed = getattr(args, "seed", 0)
         self.vis = getattr(args, "vis", False)
         self.freq = getattr(args, "freq", 20)
         self.ac_noise = getattr(args, "ac_noise", 0)
@@ -212,6 +213,7 @@ class RobosuiteBaseEnv:
         self._frames = []
         self._ac_noise_multiplier = self.rng.rand()
 
+        np.random.seed(self._env_seed)  # reproducible object placement per env
         self._cached_obs_dict = self.env.reset()
         return self._make_pefm_obs(self._cached_obs_dict)
 
