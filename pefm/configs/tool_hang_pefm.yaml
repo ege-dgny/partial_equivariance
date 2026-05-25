@@ -24,7 +24,7 @@ data:
   dataset:
     path: /home/ege/pefm/data/tool_hang/pcs
     num_points: 256
-    num_demos: 50
+    num_demos: 200
     num_workers: 32
 
 training:
