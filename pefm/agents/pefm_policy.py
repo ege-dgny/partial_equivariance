@@ -395,8 +395,8 @@ class PEFMPolicy(nn.Module):
 
         # Distribution-shape metrics for the paper's training-dynamics figure.
         with torch.no_grad():
-            if self.selector.distribution.param_dim == 4:
-                # SO(2) ProjectedNormal: params = [mu_u, mu_v, log_sigma_u, log_sigma_v]
+            if not hasattr(self.selector.distribution, "tau"):  # SO(2) ProjectedNormal
+                # params = [mu_u, mu_v, log_sigma_u, log_sigma_v]
                 mu = sel_params[:, :2]
                 log_sigma = sel_params[:, 2:].clamp(-4, 4)
                 sigma = log_sigma.exp()
