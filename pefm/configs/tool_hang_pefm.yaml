@@ -26,6 +26,14 @@ data:
     num_points: 256
     num_demos: 200
     num_workers: 32
+    # SO2 rotation augmentation: tool_hang demos have zero rotation variation;
+    # augment with full 360 deg rotation so the selector learns equivariance
+    num_augment: 8
+    aug_scale_rot: -1        # full 360 deg uniform random rotation
+    aug_keep_original: true  # always include the original trajectory
+    aug_scale_pos: 0.02      # small position jitter (2cm std)
+    aug_zero_z_offset: true  # no vertical jitter
+    aug_center: [0.0, 0.0, 0.0]
 
 training:
   batch_size: 256

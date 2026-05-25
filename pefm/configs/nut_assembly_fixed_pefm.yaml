@@ -25,6 +25,15 @@ data:
     path: /home/hikmet/equibot/data/square/pcs
     num_points: 256
     num_demos: 100
+    num_workers: 32
+    # C4 rotation augmentation: nut always at 180 deg in PH demos;
+    # augment with full 360 deg so selector learns C4 symmetry
+    num_augment: 4
+    aug_scale_rot: -1        # full 360 deg (C4 selector discretizes into 4 bins)
+    aug_keep_original: true
+    aug_scale_pos: 0.02
+    aug_zero_z_offset: true
+    aug_center: [0.0, 0.0, 0.0]
 
 training:
   batch_size: 256
