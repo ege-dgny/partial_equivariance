@@ -162,6 +162,35 @@ def run_eval(
                 title=f"H(p_phi) trace - ep{ep_ix} rew={rews[ep_ix]:.2f}",
             )
 
+    if use_wandb:
+        # Per-episode reward table — one row per episode, logged at every eval.
+        rew_table = wandb.Table(
+            data=[[int(i), float(rews[i]), int(rews[i] >= 0.5)] for i in range(len(rews))],
+            columns=["episode", "reward", "success"],
+        )
+        metrics["reward_table"] = rew_table
+
+        # C4 selector distribution chart: aggregate selector_params across all
+        # episodes, compute softmax, log per-bin mean probabilities as a bar chart.
+        all_params = []
+        for ep_ix in range(num_envs):
+            for p in history[ep_ix]["selector_params"]:
+                if p is not None:
+                    all_params.append(p)
+        if all_params:
+            params_arr = np.stack(all_params)           # (T_total, param_dim)
+            exp_p = np.exp(params_arr - params_arr.max(axis=-1, keepdims=True))
+            probs_arr = exp_p / exp_p.sum(axis=-1, keepdims=True)  # (T_total, K)
+            bin_means = probs_arr.mean(axis=0)           # (K,)
+            bin_table = wandb.Table(
+                data=[[f"bin{b}", float(bin_means[b])] for b in range(len(bin_means))],
+                columns=["bin", "mean_prob"],
+            )
+            metrics["selector_distribution"] = wandb.plot.bar(
+                bin_table, "bin", "mean_prob",
+                title="Selector distribution (uniform=symmetry preserved)",
+            )
+
     if vis:
         vis_frames = images
         vis_rews = np.zeros_like(vis_frames[:, :, :20])

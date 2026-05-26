@@ -413,6 +413,8 @@ class PEFMPolicy(nn.Module):
                 metrics["selector/gumbel_tau"] = float(
                     self.selector.distribution.tau
                 )
+                for _b in range(probs.shape[-1]):
+                    metrics[f"selector/prob_bin{_b}"] = probs[:, _b].mean().item()
 
         if self.canonicalize:
             metrics["canon_scale_mean"] = canon_scale.mean().item()

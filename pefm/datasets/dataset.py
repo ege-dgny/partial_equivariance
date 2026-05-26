@@ -25,6 +25,7 @@ class BaseDataset(Dataset):
         self.aug_scale_aspect_limit = cfg["aug_scale_aspect_limit"]
         self.aug_scale_pos = cfg["aug_scale_pos"]
         self.aug_scale_rot = cfg["aug_scale_rot"]
+        self.aug_c4_rot = cfg.get("aug_c4_rot", False)
         self.aug_center = np.array(cfg["aug_center"])
         self.same_aug_per_sample = cfg["same_aug_per_sample"]
         self.aug_zero_z_offset = cfg["aug_zero_z_offset"]
@@ -232,7 +233,10 @@ class BaseDataset(Dataset):
                         + self.aug_scale_low,
                     )
 
-                if self.aug_scale_rot < 0:
+                if self.aug_c4_rot:
+                    # Crisp C4-aligned rotation: aug_idx maps to exact group elements
+                    rot = aug_idx * (2 * np.pi / self.num_augment)
+                elif self.aug_scale_rot < 0:
                     rot = rs.rand() * np.pi * 2
                 else:
                     rot = (rs.rand() * 2 - 1) * self.aug_scale_rot

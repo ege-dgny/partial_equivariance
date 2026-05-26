@@ -44,6 +44,7 @@ data:
     aug_scale_high: 1.5
     aug_scale_aspect_limit: 1.0
     aug_scale_rot: -1
+    aug_c4_rot: false
     aug_scale_pos: 0.1
     aug_zero_z_offset: false
     aug_center: [0., 0., 0.]
