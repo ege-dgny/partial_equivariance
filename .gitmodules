@@ -1,0 +1,4 @@
+[submodule "equibot"]
+	path = equibot
+	url = https://github.com/ege-dgny/equibot.git
+	branch = hikmet-robomimic
