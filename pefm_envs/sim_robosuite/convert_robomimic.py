@@ -305,7 +305,7 @@ def extract_point_cloud(
     )
     extrinsic = get_camera_extrinsic_matrix(sim, camera_name)
     # extrinsic is world-to-camera; invert for camera-to-world
-    cam2world = np.linalg.inv(extrinsic)
+    cam2world = extrinsic  # robosuite get_camera_extrinsic_matrix is already camera->world; do NOT invert
 
     fx, fy = intrinsic[0, 0], intrinsic[1, 1]
     cx, cy = intrinsic[0, 2], intrinsic[1, 2]
@@ -334,7 +334,7 @@ def extract_point_cloud(
 
     # Unproject to camera frame (OpenCV convention from robosuite extrinsic)
     x_cam = (u_grid - cx) * z_vals / fx
-    y_cam = (v_grid - cy) * z_vals / fy
+    y_cam = -(v_grid - cy) * z_vals / fy  # OpenGL camera: y points up, image row v points down
     pts_cam = np.stack([x_cam, y_cam, z_vals, np.ones_like(z_vals)], axis=-1)
 
     # Camera to world
