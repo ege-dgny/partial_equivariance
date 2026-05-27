@@ -22,8 +22,8 @@ env:
 
 data:
   dataset:
-    path: /home/ege/pefm/data/nut_assembly_100/pcs
-    num_points: 256
+    path: /home/ege/pefm/data/nut_assembly_100_fixed/pcs
+    num_points: 512
     num_demos: 100
     num_workers: 32
     # C4-aligned augmentation: aug_idx i -> exactly i*90 degrees
@@ -42,7 +42,7 @@ training:
   batch_size: 256
   num_epochs: 2000
   lr: 1e-4
-  num_eval_episodes: 8
+  num_eval_episodes: 20
   eval_interval: 200
   save_interval: 50
 
