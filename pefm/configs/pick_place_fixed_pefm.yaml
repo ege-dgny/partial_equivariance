@@ -15,7 +15,7 @@ env:
 
 data:
   dataset:
-    path: /home/ege/pefm/data/pick_place_fixed/pcs
+    path: /home/ege/pefm/data/can_pcfix/pcs
     num_points: 1024
     num_demos: 50
 
