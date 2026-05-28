@@ -11,12 +11,27 @@ env:
     dof: 7
     max_episode_length: 200
     freq: 20
-    randomize_rotation: false   # primary protocol: continuous-yaw to match PH demos
+    randomize_rotation: false
+
+data:
+  dataset:
+    path: /home/ege/pefm/data/pick_place_fixed/pcs
+    num_points: 1024
+    num_demos: 50
+
+training:
+  batch_size: 64
+  num_epochs: 200
+  lr: 1e-4
+  num_eval_episodes: 20
+  eval_interval: 50
+  save_interval: 50
 
 model:
+  hidden_dim: 256
   symmetry:
     group_type: so2
     distribution_type: projected_normal
-    num_samples: 8
-    num_samples_eval: 16
+    num_samples: 4
+    num_samples_eval: 8
     entropy_weight: 0.01

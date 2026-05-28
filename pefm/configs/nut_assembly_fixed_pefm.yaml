@@ -23,37 +23,35 @@ env:
 data:
   dataset:
     path: /home/ege/pefm/data/nut_assembly_100_fixed/pcs
-    num_points: 512
-    num_demos: 100
+    num_points: 1024
+    num_demos: 50
     num_workers: 32
-    # C4-aligned augmentation: aug_idx i -> exactly i*90 degrees
-    # Creates crisp group-element-aligned training signal for the C4 selector.
     num_augment: 4
     aug_c4_rot: true
-    aug_scale_rot: -1        # unused when aug_c4_rot=true
+    aug_scale_rot: -1
     aug_keep_original: true
-    aug_scale_low: 1.0       # no scale aug: isolate rotation signal
+    aug_scale_low: 1.0
     aug_scale_high: 1.0
     aug_scale_pos: 0.02
     aug_zero_z_offset: true
     aug_center: [0.0, 0.0, 0.0]
 
 training:
-  batch_size: 256
-  num_epochs: 2000
+  batch_size: 64
+  num_epochs: 200
   lr: 1e-4
   num_eval_episodes: 20
-  eval_interval: 200
+  eval_interval: 50
   save_interval: 50
 
 model:
-  hidden_dim: 128
+  hidden_dim: 256
   symmetry:
     group_type: c4
     distribution_type: gumbel_categorical
-    num_samples: 8
+    num_samples: 4
     num_samples_eval: 8
-    entropy_weight: 0.005    # halved: let flow loss dominate sooner
+    entropy_weight: 0.005
     gumbel_tau: 1.0
     gumbel_tau_min: 0.1
     gumbel_anneal_rate: 0.0003
