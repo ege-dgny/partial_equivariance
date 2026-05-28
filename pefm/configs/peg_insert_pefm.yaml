@@ -2,12 +2,31 @@ defaults:
   - base_pefm
 
 env:
-  env_class: peg_insert_genesis
+  env_class: peg_insert          # PyBullet sim_franka (Genesis backend was failing)
   num_eef: 1
+  dof: 7
+  eef_dim: 13
+  vectorize: true
   args:
     num_eef: 1
-    demo_mode: false
-    max_episode_length: 80
+    dof: 7
+    # demos run ~200-306 control steps; eval executes max_episode_length//ac_horizon
+    # chunks, so 80 was far too short to ever finish the insertion.
+    max_episode_length: 400
+    randomize_rotation: true      # spawn-angle variety; peg C4 key-rotation always on
+
+data:
+  dataset:
+    path: /home/ege/pefm/data/peg_insert/pcs
+    num_points: 512
+    num_demos: 50
+
+training:
+  num_epochs: 200
+  batch_size: 32
+  num_eval_episodes: 12
+  eval_interval: 50               # eval+paper figures at ep 50/100/150/199
+  save_interval: 50
 
 model:
   symmetry:
@@ -18,3 +37,8 @@ model:
     gumbel_tau: 1.0
     gumbel_tau_min: 0.1
     gumbel_anneal_rate: 0.0003
+
+use_wandb: true
+wandb:
+  entity: null
+  project: pefm
