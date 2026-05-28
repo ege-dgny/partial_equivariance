@@ -266,6 +266,7 @@ def extract_point_cloud(
     num_points: int = 4096,
     rng: np.random.RandomState | None = None,
     object_geom_ids: set[int] | None = None,
+    ws_bounds=((-0.5, 0.8), (-0.6, 0.6), (0.78, 1.3)),
 ) -> np.ndarray:
     """Extract world-frame point cloud using robosuite's camera utilities.
 
@@ -340,14 +341,15 @@ def extract_point_cloud(
     # Camera to world
     pts_world = (cam2world @ pts_cam.T).T[:, :3]
 
-    # Workspace bounds (table area)
+    # Workspace bounds (task-specific; default = full table area)
+    (_xlo, _xhi), (_ylo, _yhi), (_zlo, _zhi) = ws_bounds
     ws_mask = (
-        (pts_world[:, 2] > 0.78)
-        & (pts_world[:, 2] < 1.3)
-        & (pts_world[:, 0] > -0.5)
-        & (pts_world[:, 0] < 0.8)
-        & (pts_world[:, 1] > -0.6)
-        & (pts_world[:, 1] < 0.6)
+        (pts_world[:, 2] > _zlo)
+        & (pts_world[:, 2] < _zhi)
+        & (pts_world[:, 0] > _xlo)
+        & (pts_world[:, 0] < _xhi)
+        & (pts_world[:, 1] > _ylo)
+        & (pts_world[:, 1] < _yhi)
     )
     pts_world = pts_world[ws_mask]
 
@@ -522,6 +524,7 @@ def convert_hdf5(
                 camera_name="agentview",
                 camera_height=render_res,
                 camera_width=render_res,
+                ws_bounds=(((-0.2, 0.45), (-0.55, 0.12), (0.80, 1.25)) if task == "can" else ((-0.5, 0.8), (-0.6, 0.6), (0.78, 1.3))),
                 num_points=num_points,
                 rng=rng,
                 object_geom_ids=object_geom_ids,

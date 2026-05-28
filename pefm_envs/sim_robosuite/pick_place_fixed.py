@@ -22,6 +22,10 @@ class PickPlaceFixedEnv(RobosuiteBaseEnv):
     # Fixed bin position (world frame, XY only — Z is table height)
     BIN_POS = np.array([0.18, 0.25])
 
+    # Task-specific PC crop: drop the fixed target bin (y>0.12) so the can
+    # is a larger fraction of the object-only cloud. Target is fixed -> memorized.
+    WS_BOUNDS = ((-0.2, 0.45), (-0.55, 0.12), (0.80, 1.25))
+
     @property
     def robosuite_env_name(self) -> str:
         return "PickPlaceCan"
