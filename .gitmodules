@@ -2,3 +2,6 @@
 	path = equibot
 	url = https://github.com/ege-dgny/equibot.git
 	branch = hikmet-robomimic
+[submodule "equidiff"]
+	path = equidiff
+	url = https://github.com/pointW/equidiff.git
