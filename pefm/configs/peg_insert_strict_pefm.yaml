@@ -1,0 +1,11 @@
+# Strict-equivariance baseline for the PEFM peg_insert ablation.
+# Identical to peg_insert_pefm except the symmetry selector is FORCED uniform
+# (force_uniform=true) -> exact C4 group average that can never collapse.
+# Expected to fail the keyway alignment (cannot break symmetry), providing the
+# failure contrast for the partial-equivariance claim.
+defaults:
+  - peg_insert_pefm
+
+model:
+  symmetry:
+    force_uniform: true

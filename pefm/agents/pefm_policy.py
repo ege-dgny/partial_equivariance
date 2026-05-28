@@ -73,6 +73,7 @@ class PEFMPolicy(nn.Module):
             hidden_dim=cfg.model.symmetry.hidden_dim,
             group=self.group,
             distribution=self.distribution,
+            force_uniform=cfg.model.symmetry.get("force_uniform", False),
         )
 
         # 3. Base Vector Field (non-equivariant ConditionalUnet1D)

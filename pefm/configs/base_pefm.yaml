@@ -80,6 +80,7 @@ model:
   symmetry:
     group_type: so2
     distribution_type: projected_normal
+    force_uniform: false   # strict-equivariance baseline when true
     num_samples: 8
     num_samples_eval: 16
     hidden_dim: 64
