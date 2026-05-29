@@ -22,6 +22,10 @@ class PickPlaceFixedEnv(RobosuiteBaseEnv):
     # Fixed bin position (world frame, XY only — Z is table height)
     BIN_POS = np.array([0.18, 0.25])
 
+    # Use the May-19 (legacy) unprojection; train data (old pick_place_fixed)
+    # was generated with it. Tests whether 1c15d86 regressed Can.
+    LEGACY_UNPROJECTION = True
+
     @property
     def robosuite_env_name(self) -> str:
         return "PickPlaceCan"

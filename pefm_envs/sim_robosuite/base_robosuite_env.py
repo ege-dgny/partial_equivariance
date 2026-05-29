@@ -321,7 +321,12 @@ class RobosuiteBaseEnv:
         z_metric = near / (1.0 - depth * (1.0 - near / far))
         intrinsic = get_camera_intrinsic_matrix(sim, "agentview", H, W)
         extrinsic = get_camera_extrinsic_matrix(sim, "agentview")
-        cam2world = extrinsic  # robosuite get_camera_extrinsic_matrix is already camera->world; do NOT invert
+        # Legacy (pre-1c15d86) unprojection toggle for tasks that regressed under
+        # the corrected geometry (PickPlace). Train data must use the same form.
+        if getattr(self, "LEGACY_UNPROJECTION", False):
+            cam2world = np.linalg.inv(extrinsic)
+        else:
+            cam2world = extrinsic  # already camera->world; do NOT invert
 
         fx, fy = intrinsic[0, 0], intrinsic[1, 1]
         cx, cy = intrinsic[0, 2], intrinsic[1, 2]
@@ -361,7 +366,10 @@ class RobosuiteBaseEnv:
         z_vals = z_metric[v_grid, u_grid]
 
         x_cam = (u_grid - cx) * z_vals / fx
-        y_cam = -(v_grid - cy) * z_vals / fy  # OpenGL camera: y points up, image row v points down
+        if getattr(self, "LEGACY_UNPROJECTION", False):
+            y_cam = (v_grid - cy) * z_vals / fy   # legacy sign
+        else:
+            y_cam = -(v_grid - cy) * z_vals / fy  # OpenGL: y up, row v down
         pts_cam = np.stack([x_cam, y_cam, z_vals, np.ones_like(z_vals)], axis=-1)
         pts_world = (cam2world @ pts_cam.T).T[:, :3]
 

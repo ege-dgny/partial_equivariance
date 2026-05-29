@@ -73,12 +73,13 @@ class ProjectedNormalSO2(nn.Module):
         # Fix: use the von Mises entropy of the induced angular distribution with
         # concentration kappa = ||mu|| / sigma. Bounded above by log(2*pi); both
         # mu and sigma receive sensible gradients only through the ratio kappa.
-        kappa = mu.norm(dim=-1) / sigma.mean(dim=-1).clamp(min=1e-6)  # (B,)
-        # H(kappa) = log(2*pi*I0(k)) - k*I1(k)/I0(k), via exp-scaled Bessel:
-        #   log I0(k) = log(i0e(k)) + k ;  I1(k)/I0(k) = i1e(k)/i0e(k)
-        i0e = torch.special.i0e(kappa)
-        i1e = torch.special.i1e(kappa)
-        H = math.log(2 * math.pi) + (torch.log(i0e) + kappa) - kappa * (i1e / i0e)
+        # May-19 (8e3d31f) clamped form: penalizes collapse but RELEASES
+        # (gradient 0) above the log(2*pi) cap, so the flow loss can freely
+        # collapse the SO2 selector. The von Mises form regularized toward
+        # uniform continuously -> SO2 selector stuck uniform -> Can regressed.
+        concentration_sq = (mu / sigma).pow(2).sum(dim=-1)  # (B,)
+        H_approx = math.log(2 * math.pi) + log_sigma.mean(dim=-1) - 0.5 * concentration_sq
+        H = H_approx.clamp(max=math.log(2 * math.pi))
 
         return H
 
