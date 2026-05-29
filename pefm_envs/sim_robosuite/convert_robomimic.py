@@ -266,6 +266,7 @@ def extract_point_cloud(
     num_points: int = 4096,
     rng: np.random.RandomState | None = None,
     object_geom_ids: set[int] | None = None,
+    legacy_unprojection: bool = False,
 ) -> np.ndarray:
     """Extract world-frame point cloud using robosuite's camera utilities.
 
@@ -305,7 +306,12 @@ def extract_point_cloud(
     )
     extrinsic = get_camera_extrinsic_matrix(sim, camera_name)
     # extrinsic is world-to-camera; invert for camera-to-world
-    cam2world = extrinsic  # robosuite get_camera_extrinsic_matrix is already camera->world; do NOT invert
+    # Legacy (pre-1c15d86) unprojection for tasks whose data was generated with it
+    # (pick_place/can). Must match the eval env's LEGACY_UNPROJECTION setting.
+    if legacy_unprojection:
+        cam2world = np.linalg.inv(extrinsic)
+    else:
+        cam2world = extrinsic  # already camera->world; do NOT invert
 
     fx, fy = intrinsic[0, 0], intrinsic[1, 1]
     cx, cy = intrinsic[0, 2], intrinsic[1, 2]
@@ -334,7 +340,10 @@ def extract_point_cloud(
 
     # Unproject to camera frame (OpenCV convention from robosuite extrinsic)
     x_cam = (u_grid - cx) * z_vals / fx
-    y_cam = -(v_grid - cy) * z_vals / fy  # OpenGL camera: y points up, image row v points down
+    if legacy_unprojection:
+        y_cam = (v_grid - cy) * z_vals / fy   # legacy sign
+    else:
+        y_cam = -(v_grid - cy) * z_vals / fy  # OpenGL: y up, row v down
     pts_cam = np.stack([x_cam, y_cam, z_vals, np.ones_like(z_vals)], axis=-1)
 
     # Camera to world
@@ -522,6 +531,7 @@ def convert_hdf5(
                 camera_name="agentview",
                 camera_height=render_res,
                 camera_width=render_res,
+                legacy_unprojection=(task == "can"),
                 num_points=num_points,
                 rng=rng,
                 object_geom_ids=object_geom_ids,
