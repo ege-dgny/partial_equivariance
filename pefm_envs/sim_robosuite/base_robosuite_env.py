@@ -365,13 +365,11 @@ class RobosuiteBaseEnv:
         pts_cam = np.stack([x_cam, y_cam, z_vals, np.ones_like(z_vals)], axis=-1)
         pts_world = (cam2world @ pts_cam.T).T[:, :3]
 
-        # Workspace bounds (task-specific via WS_BOUNDS; default = full table)
-        (_xlo, _xhi), (_ylo, _yhi), (_zlo, _zhi) = getattr(
-            self, "WS_BOUNDS", ((-0.5, 0.8), (-0.6, 0.6), (0.78, 1.3)))
+        # Workspace bounds (table area)
         ws = (
-            (pts_world[:, 2] > _zlo) & (pts_world[:, 2] < _zhi)
-            & (pts_world[:, 0] > _xlo) & (pts_world[:, 0] < _xhi)
-            & (pts_world[:, 1] > _ylo) & (pts_world[:, 1] < _yhi)
+            (pts_world[:, 2] > 0.78) & (pts_world[:, 2] < 1.3)
+            & (pts_world[:, 0] > -0.5) & (pts_world[:, 0] < 0.8)
+            & (pts_world[:, 1] > -0.6) & (pts_world[:, 1] < 0.6)
         )
         return pts_world[ws].astype(np.float32)
 
